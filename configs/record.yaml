@@ -12,6 +12,7 @@ dataset:
   reset_time_s: 15
   num_episodes: 50
   streaming_encoding: true
+  encoder_threads: 2
   vcodec: auto
   push_to_hub: true
 

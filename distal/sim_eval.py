@@ -14,6 +14,7 @@ Two modes, selected by ``is_libero_plus``:
   states).
 """
 
+import gc
 import json
 import logging
 import time
@@ -207,6 +208,8 @@ def run_sim_eval(
                 )
             finally:
                 vec_env.close()
+                gc.collect()
+                torch.cuda.empty_cache()
 
     eval_s = time.monotonic() - t0
 

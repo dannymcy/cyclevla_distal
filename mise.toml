@@ -34,9 +34,13 @@ lerobot-eval --config_path configs/eval.yaml \
 description = "Record demonstrations via teleop"
 run = "lerobot-record --config_path configs/record.yaml"
 
-[tasks.play]
+[tasks.rollout]
 description = "Play trained policy on physical arm"
-run = "lerobot-record --config_path configs/play.yaml --policy.path=reece-omahoney/smolvla-libero-256"
+run = """
+lerobot-rollout --config_path configs/rollout.yaml \
+  --policy.path=reece-omahoney/pi05-remove-pen-lid \
+  --policy.n_action_steps=20
+"""
 
 # Cluster
 

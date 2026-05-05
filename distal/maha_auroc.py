@@ -24,8 +24,7 @@ from sklearn.metrics import roc_auc_score
 from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 
-from distal.compute_maha_stats import compute_mahalanobis_np
-from distal.embedding import embed_prefix_pooled
+from distal.compute_maha_stats import compute_mahalanobis_np, embed_prefix_pooled
 
 
 @dataclass

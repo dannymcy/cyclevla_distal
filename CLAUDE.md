@@ -75,8 +75,8 @@ by the next.
    actions, and per-episode `success` into a LeRobot dataset.
 1. **Maha stats** (`distal/compute_maha_stats.py`) — From the base dataset the
    policy was trained on, fit Ledoit-Wolf mean / inverse covariance over
-   mean-pooled VLM image-token embeddings (`distal/embedding.py`). Saved as
-   safetensors and cached on the HF Hub.
+   mean-pooled VLM image-token embeddings. Saved as safetensors and cached on
+   the HF Hub.
 1. **Train value** (`distal/train_value.py`) — Distributional value model
    (`RECAPValueNetwork` in `distal/value_model.py`: SmolVLM + expert + learned
    value query token + categorical head, vision encoder frozen). Reward signal
@@ -106,7 +106,6 @@ auto-set to a per-task percentile during training), `advantage_dropout` (CFG).
 
 - `value_model.py` — `RECAPValueNetwork` (SmolVLM + expert backbone, value query
   token, categorical head over discretized return bins).
-- `embedding.py` — Mean-pooled VLM prefix embeddings for PI05.
 - `maha_reward.py` — Loads stats from `compute_maha_stats.py`, computes per-
   frame Mahalanobis distances on a value-training dataset, min-max normalizes to
   `[-1, 0]` for use as per-step rewards.

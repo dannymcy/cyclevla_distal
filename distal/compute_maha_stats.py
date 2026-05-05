@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import draccus
 import numpy as np
@@ -11,8 +11,9 @@ from huggingface_hub import HfApi
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.policies.factory import make_policy, make_pre_post_processors
-from lerobot.policies.pi05.modeling_pi05 import PI05Policy
+from lerobot.policies.pi05.modeling_pi05 import PI05Policy, make_att_2d_masks
 from lerobot.processor import rename_stats
+from lerobot.utils.constants import OBS_LANGUAGE_ATTENTION_MASK, OBS_LANGUAGE_TOKENS
 from lerobot.utils.device_utils import get_safe_torch_device
 from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.utils import init_logging, inside_slurm
@@ -20,7 +21,40 @@ from safetensors.numpy import save_file
 from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 
-from distal.embedding import embed_prefix_pooled
+
+@torch.no_grad()
+def embed_prefix_pooled(policy: PI05Policy, batch: dict) -> torch.Tensor:
+    """Mean-pool PaliGemma prefix embeddings over image tokens."""
+    model = policy.model
+    images, img_masks = policy._preprocess_images(batch)
+    lang_tokens = batch[OBS_LANGUAGE_TOKENS]
+    lang_masks = batch[OBS_LANGUAGE_ATTENTION_MASK]
+
+    prefix_embs, prefix_pad_masks, prefix_att_masks = model.embed_prefix(
+        images, img_masks, lang_tokens, lang_masks
+    )
+    position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
+
+    q_dtype = model.paligemma_with_expert.paligemma.model.language_model.layers[
+        0
+    ].self_attn.q_proj.weight.dtype
+    prefix_embs = prefix_embs.to(dtype=q_dtype)
+    attention_mask = model._prepare_attention_masks_4d(
+        make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
+    ).to(dtype=q_dtype)
+
+    (prefix_out, _), _ = model.paligemma_with_expert.forward(
+        attention_mask=attention_mask,
+        position_ids=cast(torch.LongTensor, position_ids),
+        past_key_values=None,
+        inputs_embeds=cast(list[torch.FloatTensor], [prefix_embs, None]),
+        use_cache=False,
+    )
+
+    # Prefix layout is [img...][lang...]; pool over image tokens only.
+    n_img = prefix_embs.shape[1] - lang_tokens.shape[1]
+    mask = prefix_pad_masks[:, :n_img].unsqueeze(-1).float()
+    return (prefix_out[:, :n_img].float() * mask).sum(dim=1) / mask.sum(dim=1)
 
 
 def compute_mahalanobis_np(

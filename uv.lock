@@ -3215,7 +3215,7 @@ wheels = [
 [[package]]
 name = "skypilot"
 version = "1.0.0.dev0"
-source = { git = "https://github.com/reeceomahoney/skypilot.git?branch=vast-no-geo-pin#64e98b69ede1c219cd757a7a8cc340961efe9c76" }
+source = { git = "https://github.com/reeceomahoney/skypilot.git?branch=vast-no-geo-pin#1b156c120ead15d10863ab1832b80b6a076ed08c" }
 dependencies = [
     { name = "aiofiles" },
     { name = "aiohttp" },
@@ -3262,6 +3262,7 @@ dependencies = [
     { name = "sqlalchemy" },
     { name = "sqlalchemy-adapter" },
     { name = "tabulate" },
+    { name = "tqdm" },
     { name = "types-paramiko" },
     { name = "typing-extensions" },
     { name = "uvicorn", extra = ["standard"] },

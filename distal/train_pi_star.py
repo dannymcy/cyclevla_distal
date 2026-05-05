@@ -72,7 +72,7 @@ class RECAPPiStarTrainingConfig:
     """Configuration for RECAP PiStar06 advantage-conditioned Pi0.5 policy training."""
 
     repo_id: str = "reece-omahoney/pi05-libero-plus"
-    value_network_pretrained_path: str = "reece-omahoney/value-steps-libero-plus-50"
+    value_network_pretrained_path: str = "reece-omahoney/value-maha-libero-plus"
     root: str | None = None
     revision: str | None = None
     episodes: list[int] | None = None
@@ -177,13 +177,13 @@ class RECAPPiStarTrainingConfig:
     eval_n_episodes_per_task: int = 1
 
     # Hub push for trained PiStar06 policy
-    pi_star_repo_id: str | None = "reece-omahoney/pistar06-libero-plus-steps"
+    pi_star_repo_id: str | None = "reece-omahoney/pistar06-libero-plus-maha"
     push_to_hub: bool = True
 
     # Weights & Biases (optional; set wandb_project to enable)
     wandb_project: str | None = "distal"
     wandb_entity: str | None = None
-    wandb_run_name: str | None = "pistar06-libero-plus-steps"
+    wandb_run_name: str | None = "pistar06-libero-plus-maha"
 
 
 def _init_wandb(cfg: RECAPPiStarTrainingConfig):

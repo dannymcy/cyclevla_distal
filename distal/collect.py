@@ -130,6 +130,7 @@ def main(cfg: EvalDistConfig):
         repo_id=cfg.dataset_repo_id,
         fps=int(base_meta.fps),
         features=features,
+        vcodec="auto",
     )
 
     # ── Rollout ──

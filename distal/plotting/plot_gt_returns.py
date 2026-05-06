@@ -126,6 +126,7 @@ def main() -> None:
         root=cfg.root,
         revision=cfg.revision,
         episodes=list(range(num_episodes_to_load)),
+        vcodec="auto",
     )
     success_by_episode = _load_episode_success_from_dataset(dataset)
 

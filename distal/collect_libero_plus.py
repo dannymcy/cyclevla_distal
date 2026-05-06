@@ -256,7 +256,7 @@ def main(cfg: EvalDistConfig):
                 "shape": (env_cfg.observation_height, env_cfg.observation_width, 3),
             }
     dataset = LeRobotDataset.create(
-        repo_id=cfg.dataset_repo_id, fps=20, features=features
+        repo_id=cfg.dataset_repo_id, fps=20, features=features, vcodec="auto"
     )
 
     # ── Rollout ──

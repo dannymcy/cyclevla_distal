@@ -129,7 +129,7 @@ def main() -> None:
         f"device      = {device}"
     )
 
-    dataset = LeRobotDataset(repo_id=cfg.repo_id, episodes=episodes)
+    dataset = LeRobotDataset(repo_id=cfg.repo_id, episodes=episodes, vcodec="auto")
     print(f"frames = {len(dataset.hf_dataset)}  episodes = {len(episodes)}")
 
     mean, cov_inv = load_maha_stats(cfg.maha_stats_path)

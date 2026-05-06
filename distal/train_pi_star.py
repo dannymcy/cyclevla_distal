@@ -723,6 +723,7 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
         root=cfg.root,
         revision=cfg.revision,
         episodes=cfg.episodes,
+        vcodec="auto",
     )
 
     success_by_episode = base._load_episode_success_from_dataset(full_dataset)
@@ -916,6 +917,7 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
         revision=cfg.revision,
         episodes=train_ep_ids,
         delta_timestamps=delta_timestamps,
+        vcodec="auto",
     )
     val_dataset = LeRobotDataset(
         repo_id=cfg.repo_id,
@@ -923,6 +925,7 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
         revision=cfg.revision,
         episodes=val_ep_ids,
         delta_timestamps=delta_timestamps,
+        vcodec="auto",
     )
 
     # ── 5. Create policy ─────────────────────────────────────────────────

@@ -1050,6 +1050,7 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
         root=cfg.root,
         revision=cfg.revision,
         episodes=cfg.episodes,
+        vcodec="auto",
     )
 
     success_by_episode = _load_episode_success_from_dataset(dataset)

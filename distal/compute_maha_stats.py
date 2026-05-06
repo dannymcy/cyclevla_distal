@@ -180,7 +180,7 @@ def main(cfg: MahaStatsConfig):
     torch.backends.cuda.matmul.allow_tf32 = True
 
     # Load dataset
-    dataset = LeRobotDataset(repo_id=cfg.dataset_repo_id)
+    dataset = LeRobotDataset(repo_id=cfg.dataset_repo_id, vcodec="auto")
 
     # Load policy
     policy_cfg = PreTrainedConfig.from_pretrained(cfg.policy_path)

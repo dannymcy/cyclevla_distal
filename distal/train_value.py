@@ -81,22 +81,13 @@ class RECAPValueTrainingConfig:
     """Configuration for RECAP value-network train/val."""
 
     repo_id: str = "reece-omahoney/pi05-libero-plus"
-    root: str | None = None
-    revision: str | None = None
-    episodes: list[int] | None = None
-
-    epochs: int = 2
+    train_steps: int = 20_000
     batch_size: int = 64
-    gradient_accumulation_steps: int = 1
-    num_workers: int = 4
-    learning_rate: float = 2e-4
-    weight_decay: float = 1e-4
-    warmup_steps: int = 500
-    max_grad_norm: float = 1.0
+    num_workers: int = 8
+    learning_rate: float = 2.5e-5
     val_split_ratio: float = 0.1
     seed: int = 42
     device: str = "auto"
-    max_train_steps_per_epoch: int | None = None
     max_val_steps_per_epoch: int | None = None
     log_every_n_steps: int = 100
     validate_every_n_train_steps: int = 50
@@ -104,22 +95,23 @@ class RECAPValueTrainingConfig:
     max_val_steps_per_step_validation: int | None = 20
     val_plot_num_episodes: int = 4
     val_plot_num_frames: int = 8
-    val_plot_every_n_epochs: int = 1
 
-    # Early stopping (set patience to None to disable).
-    early_stopping_patience: int | None = 20
-    early_stopping_min_delta: float = 0.005
+    # Early stopping (set patience to None to disable). Patience is in
+    # validation events; with validate_every_n_train_steps=50 the default
+    # patience=40 ≈ 2000 train steps without improvement.
+    early_stopping_patience: int | None = 40
+    early_stopping_min_delta: float = 0.001
 
     # Value target construction
     c_fail: float = 50.0
-    num_value_bins: int = 50
+    num_value_bins: int = 201
 
     # Per-step reward source: "steps" = fixed -1, "maha" = normalized
     # Mahalanobis distance of each frame's VLM embedding from the base
     # training distribution (see distal/maha_reward.py).
     reward_mode: Literal["steps", "maha"] = "maha"
     base_policy: str = "lerobot/pi05-libero"
-    maha_stats_path: str = "reece-omahoney/pi05-libero-plus-maha-stats"
+    maha_stats_path: str = "reece-omahoney/pi05-maha-stats"
     maha_embed_batch_size: int = 32
     maha_embed_num_workers: int = 4
     # Upload computed maha rewards to the dataset repo for reuse on later runs.
@@ -129,49 +121,22 @@ class RECAPValueTrainingConfig:
     tokenizer_max_length: int = 200
     image_size: int = 224
 
-    # PaliGemma VLM backbone
-    paligemma_variant: str = "gemma_2b"
-    tokenizer_name: str = "google/paligemma-3b-pt-224"
+    # VLM backbone: SigLIP-400M vision tower + Gemma 3 270M text backbone
+    text_backbone: str = "google/gemma-3-270m"
+    vision_tower: str = "google/siglip-so400m-patch14-224"
     model_precision: str = "bfloat16"
-    freeze_vision_encoder: bool = True
-    freeze_backbone: bool = True
-    num_unfrozen_backbone_layers: int = 3
-    num_vlm_layers: int = 10
     value_head_depth: int = 1
-    dropout: float = 0.1
-
-    # Pretrained VLM initialisation (e.g. "lerobot/pi05_base")
-    pretrained_path: str | None = "lerobot/pi05-libero"
+    gradient_checkpointing: bool = True
+    compile_model: bool = True
 
     # Hub push for trained value network
-    value_repo_id: str | None = "reece-omahoney/value-maha-libero-plus"
+    value_repo_id: str | None = "reece-omahoney/value-maha-libero-plus-gemma3"
     push_to_hub: bool = True
 
     # Weights & Biases (optional; set wandb_project to enable)
     wandb_project: str | None = "distal-value"
     wandb_entity: str | None = None
-    wandb_run_name: str | None = "value-maha-libero-plus"
-
-
-class EarlyStopSignal(Exception):
-    """Internal signal raised mid-epoch to halt training when patience is exhausted."""
-
-
-def _build_warmup_cosine_scheduler(
-    optimizer: torch.optim.Optimizer,
-    total_steps: int,
-    warmup_steps: int,
-) -> torch.optim.lr_scheduler.LambdaLR:
-    """Linear warmup followed by cosine decay to 0."""
-    warmup_steps = max(1, min(warmup_steps, total_steps))
-
-    def lr_lambda(current_step: int) -> float:
-        if current_step < warmup_steps:
-            return current_step / warmup_steps
-        progress = (current_step - warmup_steps) / max(1, total_steps - warmup_steps)
-        return max(0.0, 0.5 * (1.0 + math.cos(math.pi * progress)))
-
-    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+    wandb_run_name: str | None = "value-maha-libero-plus-gemma3"
 
 
 def _set_seed(seed: int) -> None:
@@ -799,18 +764,17 @@ def _run_epoch(
     device: torch.device,
     optimizer: torch.optim.Optimizer | None,
     max_grad_norm: float,
-    epoch_index: int,
-    total_epochs: int,
+    pass_index: int,
+    total_train_steps: int,
     max_steps: int | None = None,
     log_every_n_steps: int = 0,
-    on_train_step_end: Callable[[int], None] | None = None,
+    on_train_step_end: Callable[[int], bool] | None = None,
     collect_episode_ids: set[int] | None = None,
     value_bin_support: torch.Tensor | None = None,
     collected_predictions: dict[int, list[ValidationFramePrediction]] | None = None,
     wandb_run: Any = None,
     global_step_offset: int = 0,
     scheduler: torch.optim.lr_scheduler.LambdaLR | None = None,
-    gradient_accumulation_steps: int = 1,
 ) -> dict[str, float]:
     training = optimizer is not None
     model.train(mode=training)
@@ -834,7 +798,6 @@ def _run_epoch(
     epoch_start_time = time.perf_counter()
     window_start_time = epoch_start_time
 
-    grad_accum = max(1, gradient_accumulation_steps) if training else 1
     if training and optimizer is not None:
         optimizer.zero_grad(set_to_none=True)
 
@@ -847,28 +810,25 @@ def _run_epoch(
         step_num = step + 1
 
         batch = _preprocess_batch(batch, preprocessor)
+        # Strip non-tensor entries (e.g. raw "task" strings) so torch.compile's
+        # dynamo doesn't specialize on their values and recompile per task.
+        model_batch = {k: v for k, v in batch.items() if isinstance(v, torch.Tensor)}
 
-        outputs = model.compute_outputs(batch)
+        forward_ctx = torch.enable_grad() if training else torch.no_grad()
+        with forward_ctx:
+            loss, outputs = model(model_batch)
         value_logits = outputs["value_logits"]
         expected_value = outputs["expected_value"].squeeze(-1)
 
-        loss = F.cross_entropy(value_logits, batch["target_bin"])
-
         if training:
             assert optimizer is not None
-            scaled_loss = loss / grad_accum
-            scaled_loss.backward()
-
-            is_accumulation_boundary = (step_num % grad_accum == 0) or (
-                step_num == total_steps
-            )
-            if is_accumulation_boundary:
-                if max_grad_norm > 0:
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
-                optimizer.step()
-                optimizer.zero_grad(set_to_none=True)
-                if scheduler is not None:
-                    scheduler.step()
+            loss.backward()
+            if max_grad_norm > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+            if scheduler is not None:
+                scheduler.step()
 
         with torch.no_grad():
             batch_size = batch["target_bin"].shape[0]
@@ -949,8 +909,10 @@ def _run_epoch(
                 f"{step_num}/{total_steps}" if total_steps > 0 else f"{step_num}/?"
             )
 
+            global_step = global_step_offset + step_num
             logging.info(
-                f"[Epoch {epoch_index}/{total_epochs}][{phase}] step={progress} "
+                f"[pass {pass_index}][{phase}] pass_step={progress} "
+                f"global_step={global_step}/{total_train_steps} "
                 f"loss={window_loss_avg:.5f} acc={window_acc_avg:.4f} "
                 f"mae={window_mae_avg:.5f} avg_loss={avg_loss:.5f} "
                 f"avg_acc={avg_acc:.4f} avg_mae={avg_mae:.5f} "
@@ -983,12 +945,14 @@ def _run_epoch(
 
         if training and on_train_step_end is not None:
             callback_start_time = time.perf_counter()
-            on_train_step_end(step_num)
+            should_stop = on_train_step_end(step_num)
             callback_elapsed = time.perf_counter() - callback_start_time
             # Keep throughput metrics focused on training work (exclude
             # callback wall time).
             epoch_start_time += callback_elapsed
             window_start_time += callback_elapsed
+            if should_stop:
+                break
 
     if total_samples == 0:
         return {
@@ -1047,9 +1011,6 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
 
     dataset = LeRobotDataset(
         repo_id=cfg.repo_id,
-        root=cfg.root,
-        revision=cfg.revision,
-        episodes=cfg.episodes,
         vcodec="auto",
     )
 
@@ -1092,7 +1053,7 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
 
     preprocessor = build_value_preprocessor(
         dataset=dataset,
-        paligemma_variant=cfg.paligemma_variant,
+        tokenizer_name=cfg.text_backbone,
         model_precision=cfg.model_precision,
         device=str(device),
     )
@@ -1140,18 +1101,14 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
     model_precision = cast(Literal["float32", "bfloat16"], cfg.model_precision)
 
     model_config = RECAPValueConfig(
-        paligemma_variant=cfg.paligemma_variant,
+        text_backbone=cfg.text_backbone,
+        vision_tower=cfg.vision_tower,
         precision=model_precision,
         image_size=cfg.image_size,
-        tokenizer_name=cfg.tokenizer_name,
-        freeze_vision_encoder=cfg.freeze_vision_encoder,
-        freeze_backbone=cfg.freeze_backbone,
-        num_unfrozen_backbone_layers=cfg.num_unfrozen_backbone_layers,
-        num_vlm_layers=cfg.num_vlm_layers,
         num_value_bins=cfg.num_value_bins,
         value_head_depth=cfg.value_head_depth,
-        dropout=cfg.dropout,
-        vlm_pretrained_path=cfg.pretrained_path,
+        gradient_checkpointing=cfg.gradient_checkpointing,
+        compile_model=cfg.compile_model,
         device=str(device),
         repo_id=cfg.value_repo_id,
         push_to_hub=cfg.push_to_hub,
@@ -1163,31 +1120,27 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
         f"Trainable parameters: {sum(p.numel() for p in trainable_params):,} "
         f"/ {sum(p.numel() for p in model.parameters()):,} total"
     )
-    optimizer = torch.optim.AdamW(
-        trainable_params,
-        lr=cfg.learning_rate,
-        weight_decay=cfg.weight_decay,
-    )
+    from lerobot.policies.pi05.configuration_pi05 import PI05Config
 
-    steps_per_epoch = len(train_loader)
-    if cfg.max_train_steps_per_epoch is not None:
-        steps_per_epoch = min(steps_per_epoch, cfg.max_train_steps_per_epoch)
-    grad_accum = max(1, cfg.gradient_accumulation_steps)
-    optimizer_steps_per_epoch = math.ceil(steps_per_epoch / grad_accum)
-    total_optimizer_steps = optimizer_steps_per_epoch * cfg.epochs
-    scheduler = _build_warmup_cosine_scheduler(
-        optimizer,
-        total_steps=total_optimizer_steps,
-        warmup_steps=cfg.warmup_steps,
-    )
+    pi05_defaults = PI05Config(optimizer_lr=cfg.learning_rate)
+    optimizer_preset = pi05_defaults.get_optimizer_preset()
+    scheduler_preset = pi05_defaults.get_scheduler_preset()
+    max_grad_norm = optimizer_preset.grad_clip_norm
+
+    optimizer = optimizer_preset.build(trainable_params)
+    scheduler = scheduler_preset.build(optimizer, num_training_steps=cfg.train_steps)
     logging.info(
-        "Using warmup+cosine schedule: "
-        f"{min(cfg.warmup_steps, total_optimizer_steps)} warmup steps / "
-        f"{total_optimizer_steps} total optimizer steps "
-        f"(grad_accum={grad_accum}), peak lr={cfg.learning_rate}"
+        "Using pi05 optimizer/scheduler presets: "
+        f"lr={optimizer_preset.lr} betas={optimizer_preset.betas} "
+        f"eps={optimizer_preset.eps} wd={optimizer_preset.weight_decay} "
+        f"grad_clip={max_grad_norm} "
+        f"warmup={scheduler_preset.num_warmup_steps} "
+        f"decay={scheduler_preset.num_decay_steps} "
+        f"decay_lr={scheduler_preset.decay_lr} "
+        f"train_steps={cfg.train_steps}"
     )
 
-    best_val_loss = float("inf")
+    best_val_mae = float("inf")
     patience_counter = 0
     should_stop = False
     history: list[dict] = []
@@ -1250,8 +1203,9 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
         val_metrics: dict[str, float],
         trigger_tag: str,
         saved_metrics: dict | None = None,
-    ) -> None:
-        nonlocal best_val_loss, patience_counter, should_stop
+    ) -> bool:
+        """Save last/best checkpoints; return True iff early stopping should fire."""
+        nonlocal best_val_mae, patience_counter
         metrics_to_save = saved_metrics if saved_metrics is not None else val_metrics
 
         last_dir = checkpoints_dir / "last"
@@ -1263,12 +1217,12 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
         _save_json(last_dir / "metrics.json", metrics_to_save)
         _save_json(last_dir / "train_config.json", asdict(cfg))
 
-        val_loss = val_metrics.get("loss", float("nan"))
-        if math.isnan(val_loss):
-            return
+        val_mae = val_metrics.get("value_mae", float("nan"))
+        if math.isnan(val_mae):
+            return False
 
-        if best_val_loss - val_loss > cfg.early_stopping_min_delta:
-            best_val_loss = val_loss
+        if best_val_mae - val_mae > cfg.early_stopping_min_delta:
+            best_val_mae = val_mae
             patience_counter = 0
             best_dir = checkpoints_dir / "best"
             best_dir.mkdir(parents=True, exist_ok=True)
@@ -1279,27 +1233,31 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
             _save_json(best_dir / "metrics.json", metrics_to_save)
             _save_json(best_dir / "train_config.json", asdict(cfg))
             logging.info(
-                f"[{trigger_tag}] New best val_loss={val_loss:.5f}; "
+                f"[{trigger_tag}] New best val_mae={val_mae:.5f}; "
                 "saved best checkpoint."
             )
-        else:
-            patience_counter += 1
-            if cfg.early_stopping_patience is not None:
-                logging.info(
-                    f"[{trigger_tag}] No val_loss improvement "
-                    f"({val_loss:.5f} vs best {best_val_loss:.5f}); "
-                    f"patience {patience_counter}/{cfg.early_stopping_patience}"
-                )
-                if patience_counter >= cfg.early_stopping_patience:
-                    should_stop = True
-                    logging.info(
-                        f"[{trigger_tag}] Early stopping triggered after "
-                        f"{patience_counter} validations without improvement."
-                    )
+            return False
+
+        patience_counter += 1
+        patience = cfg.early_stopping_patience
+        if patience is None:
+            return False
+        logging.info(
+            f"[{trigger_tag}] No val_mae improvement "
+            f"({val_mae:.5f} vs best {best_val_mae:.5f}); "
+            f"patience {patience_counter}/{patience}"
+        )
+        if patience_counter >= patience:
+            logging.info(
+                f"[{trigger_tag}] Early stopping triggered after "
+                f"{patience_counter} validations without improvement."
+            )
+            return True
+        return False
 
     def _run_validation_and_maybe_plot(
         *,
-        epoch_index: int,
+        pass_index: int,
         trigger_tag: str,
         max_steps: int | None,
         plot_subdir: str | None,
@@ -1315,9 +1273,9 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
                 preprocessor=preprocessor,
                 device=device,
                 optimizer=None,
-                max_grad_norm=cfg.max_grad_norm,
-                epoch_index=epoch_index,
-                total_epochs=cfg.epochs,
+                max_grad_norm=max_grad_norm,
+                pass_index=pass_index,
+                total_train_steps=cfg.train_steps,
                 max_steps=max_steps,
                 log_every_n_steps=cfg.log_every_n_steps,
                 collect_episode_ids=None,
@@ -1339,9 +1297,9 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
                     preprocessor=preprocessor,
                     device=device,
                     optimizer=None,
-                    max_grad_norm=cfg.max_grad_norm,
-                    epoch_index=epoch_index,
-                    total_epochs=cfg.epochs,
+                    max_grad_norm=max_grad_norm,
+                    pass_index=pass_index,
+                    total_train_steps=cfg.train_steps,
                     max_steps=max_steps,
                     log_every_n_steps=cfg.log_every_n_steps,
                     collect_episode_ids=None,
@@ -1387,9 +1345,9 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
                     preprocessor=preprocessor,
                     device=device,
                     optimizer=None,
-                    max_grad_norm=cfg.max_grad_norm,
-                    epoch_index=epoch_index,
-                    total_epochs=cfg.epochs,
+                    max_grad_norm=max_grad_norm,
+                    pass_index=pass_index,
+                    total_train_steps=cfg.train_steps,
                     max_steps=None,
                     log_every_n_steps=0,
                     collect_episode_ids=plot_episode_id_set,
@@ -1439,18 +1397,18 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
         return val_metrics_local
 
     global_train_step = 0
+    data_pass = 0
 
-    for epoch in range(1, cfg.epochs + 1):
-        on_train_step_end: Callable[[int], None] | None = None
+    while global_train_step < cfg.train_steps:
+        data_pass += 1
+        steps_remaining = cfg.train_steps - global_train_step
+
+        on_train_step_end: Callable[[int], bool] | None = None
         if cfg.validate_every_n_train_steps > 0 or cfg.plot_every_n_train_steps > 0:
-            step_val_max_steps = (
-                cfg.max_val_steps_per_step_validation
-                if cfg.max_val_steps_per_step_validation is not None
-                else cfg.max_val_steps_per_epoch
-            )
+            step_val_max_steps = cfg.max_val_steps_per_step_validation
 
-            def _on_train_step_end(step_num: int) -> None:
-                nonlocal global_train_step
+            def _on_train_step_end(step_num: int) -> bool:
+                nonlocal global_train_step, should_stop
                 global_train_step += 1
                 should_validate_now = (
                     cfg.validate_every_n_train_steps > 0
@@ -1464,14 +1422,15 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
                 if should_plot_now:
                     should_validate_now = True
                 if not should_validate_now:
-                    return
+                    return False
 
                 trigger = (
-                    f"Epoch {epoch}/{cfg.epochs} step-validate "
-                    f"(global_step={global_train_step}, epoch_step={step_num})"
+                    f"step-validate "
+                    f"(global_step={global_train_step}/{cfg.train_steps}, "
+                    f"data_pass={data_pass}, pass_step={step_num})"
                 )
                 step_val_metrics = _run_validation_and_maybe_plot(
-                    epoch_index=epoch,
+                    pass_index=data_pass,
                     trigger_tag=trigger,
                     max_steps=step_val_max_steps,
                     plot_subdir=f"step_{global_train_step:08d}"
@@ -1479,62 +1438,82 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
                     else None,
                     loader=step_val_loader,
                 )
-                _save_checkpoint_and_check_early_stop(
+                should_stop = _save_checkpoint_and_check_early_stop(
                     val_metrics=step_val_metrics,
                     trigger_tag=trigger,
                     saved_metrics={
-                        "epoch": epoch,
                         "global_step": global_train_step,
-                        "epoch_step": step_num,
+                        "data_pass": data_pass,
+                        "pass_step": step_num,
                         "val_loss": step_val_metrics["loss"],
                         "val_bin_acc": step_val_metrics["bin_acc"],
                         "val_value_mae": step_val_metrics["value_mae"],
                     },
                 )
-                if should_stop:
-                    raise EarlyStopSignal()
+                return should_stop
 
             on_train_step_end = _on_train_step_end
 
-        try:
-            train_metrics = _run_epoch(
-                model=model,
-                loader=train_loader,
-                preprocessor=preprocessor,
-                device=device,
-                optimizer=optimizer,
-                max_grad_norm=cfg.max_grad_norm,
-                epoch_index=epoch,
-                total_epochs=cfg.epochs,
-                max_steps=cfg.max_train_steps_per_epoch,
-                log_every_n_steps=cfg.log_every_n_steps,
-                on_train_step_end=on_train_step_end,
-                wandb_run=wandb_run,
-                global_step_offset=global_train_step,
-                scheduler=scheduler,
-                gradient_accumulation_steps=cfg.gradient_accumulation_steps,
-            )
-        except EarlyStopSignal:
+        train_metrics = _run_epoch(
+            model=model,
+            loader=train_loader,
+            preprocessor=preprocessor,
+            device=device,
+            optimizer=optimizer,
+            max_grad_norm=max_grad_norm,
+            pass_index=data_pass,
+            total_train_steps=cfg.train_steps,
+            max_steps=steps_remaining,
+            log_every_n_steps=cfg.log_every_n_steps,
+            on_train_step_end=on_train_step_end,
+            wandb_run=wandb_run,
+            global_step_offset=global_train_step,
+            scheduler=scheduler,
+        )
+        if should_stop:
             logging.info(
-                f"[Epoch {epoch}/{cfg.epochs}] Early stopping triggered mid-epoch."
+                f"[step {global_train_step}/{cfg.train_steps}] "
+                "Early stopping triggered."
             )
             break
-        should_plot_validation = (
-            cfg.val_plot_num_episodes > 0
-            and cfg.val_plot_every_n_epochs > 0
-            and (epoch % cfg.val_plot_every_n_epochs == 0)
-            and bool(plot_episode_ids)
+
+        if global_train_step < cfg.train_steps:
+            # Mid-training pass-end summary; skip the heavyweight epoch-end
+            # validation since step-validation already runs on a cadence.
+            logging.info(
+                f"[data_pass={data_pass} step={global_train_step}/{cfg.train_steps}] "
+                f"train_loss={train_metrics['loss']:.5f} "
+                f"train_acc={train_metrics['bin_acc']:.4f} "
+                f"train_mae={train_metrics['value_mae']:.5f}"
+            )
+            history.append(
+                {
+                    "data_pass": data_pass,
+                    "global_step": global_train_step,
+                    "train_loss": train_metrics["loss"],
+                    "train_bin_acc": train_metrics["bin_acc"],
+                    "train_value_mae": train_metrics["value_mae"],
+                    "lr": optimizer.param_groups[0]["lr"],
+                }
+            )
+            _save_json(output_dir / "metrics_history.json", history)
+            continue
+
+        # Final pass: run a full validation pass and an end-of-training plot.
+        should_plot_validation = cfg.val_plot_num_episodes > 0 and bool(
+            plot_episode_ids
         )
         val_metrics = _run_validation_and_maybe_plot(
-            epoch_index=epoch,
-            trigger_tag=f"Epoch {epoch}/{cfg.epochs} epoch-end",
+            pass_index=data_pass,
+            trigger_tag=f"final step={global_train_step}/{cfg.train_steps}",
             max_steps=cfg.max_val_steps_per_epoch,
-            plot_subdir=f"epoch_{epoch:03d}" if should_plot_validation else None,
+            plot_subdir="final" if should_plot_validation else None,
             loader=val_loader,
         )
 
-        epoch_metrics = {
-            "epoch": epoch,
+        final_metrics = {
+            "data_pass": data_pass,
+            "global_step": global_train_step,
             "train_loss": train_metrics["loss"],
             "train_bin_acc": train_metrics["bin_acc"],
             "train_value_mae": train_metrics["value_mae"],
@@ -1543,19 +1522,19 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
             "val_value_mae": val_metrics["value_mae"],
             "lr": optimizer.param_groups[0]["lr"],
         }
-        history.append(epoch_metrics)
+        history.append(final_metrics)
 
         logging.info(
-            f"[Epoch {epoch}/{cfg.epochs}] "
-            f"train_loss={epoch_metrics['train_loss']:.5f} "
-            f"val_loss={epoch_metrics['val_loss']:.5f} "
-            f"train_acc={epoch_metrics['train_bin_acc']:.4f} "
-            f"val_acc={epoch_metrics['val_bin_acc']:.4f} "
-            f"val_mae={epoch_metrics['val_value_mae']:.5f}"
+            f"[step {global_train_step}/{cfg.train_steps}] "
+            f"train_loss={final_metrics['train_loss']:.5f} "
+            f"val_loss={final_metrics['val_loss']:.5f} "
+            f"train_acc={final_metrics['train_bin_acc']:.4f} "
+            f"val_acc={final_metrics['val_bin_acc']:.4f} "
+            f"val_mae={final_metrics['val_value_mae']:.5f}"
         )
         if wandb_run is not None:
             wandb_run.log(
-                {f"epoch/{k}": v for k, v in epoch_metrics.items()},
+                {f"final/{k}": v for k, v in final_metrics.items()},
                 step=global_train_step,
             )
 
@@ -1563,17 +1542,15 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
 
         _save_checkpoint_and_check_early_stop(
             val_metrics={
-                "loss": epoch_metrics["val_loss"],
-                "bin_acc": epoch_metrics["val_bin_acc"],
-                "value_mae": epoch_metrics["val_value_mae"],
+                "loss": final_metrics["val_loss"],
+                "bin_acc": final_metrics["val_bin_acc"],
+                "value_mae": final_metrics["val_value_mae"],
             },
-            trigger_tag=f"Epoch {epoch}/{cfg.epochs} epoch-end",
-            saved_metrics=epoch_metrics,
+            trigger_tag=f"final step={global_train_step}/{cfg.train_steps}",
+            saved_metrics=final_metrics,
         )
-        if should_stop:
-            break
 
-    logging.info(f"Training complete. Best val loss: {best_val_loss:.5f}")
+    logging.info(f"Training complete. Best val mae: {best_val_mae:.5f}")
 
     if cfg.push_to_hub and cfg.value_repo_id:
         from huggingface_hub import upload_file

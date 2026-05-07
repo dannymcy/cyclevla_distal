@@ -326,7 +326,7 @@ def _restore_freeze_state(policy, cfg: RECAPPiStarTrainingConfig) -> None:
 # ── Advantage pre-computation ────────────────────────────────────────────────
 
 
-def _make_vn_preprocessor(policy_cfg, dataset_stats):
+def _make_vn_preprocessor(policy_cfg, dataset_stats, tokenizer_name: str):
     """Build a lightweight preprocessor for VN advantage precomputation.
 
     Omits DeviceProcessorStep (VN handles device transfer internally) and
@@ -349,7 +349,7 @@ def _make_vn_preprocessor(policy_cfg, dataset_stats):
         ),
         Pi05PrepareStateTokenizerProcessorStep(max_state_dim=policy_cfg.max_state_dim),
         TokenizerProcessorStep(
-            tokenizer_name="google/paligemma-3b-pt-224",
+            tokenizer_name=tokenizer_name,
             max_length=policy_cfg.tokenizer_max_length,
             padding_side="right",
             padding="max_length",
@@ -373,7 +373,9 @@ def _precompute_advantages(
     fields consumed by ``RECAPValueNetwork`` (language tokens + images),
     without moving every tensor to GPU.
     """
-    preprocessor = _make_vn_preprocessor(policy_cfg, full_dataset.meta.stats)
+    preprocessor = _make_vn_preprocessor(
+        policy_cfg, full_dataset.meta.stats, value_network.config.text_backbone
+    )
 
     vn = value_network
     vn.eval()
@@ -408,8 +410,8 @@ def _precompute_advantages(
         B = abs_indices.shape[0]
 
         batch = preprocessor(batch)
-        outputs = vn.compute_outputs(batch)
-        V_t = outputs["expected_value"].squeeze(-1).cpu()
+        model_batch = {k: v for k, v in batch.items() if isinstance(v, torch.Tensor)}
+        V_t = vn.predict_value(model_batch).cpu()  # ty: ignore[missing-argument, invalid-argument-type]
 
         for i in range(B):
             abs_idx = int(abs_indices[i].item())

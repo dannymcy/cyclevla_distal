@@ -123,8 +123,6 @@ def main() -> None:
 
     dataset = LeRobotDataset(
         repo_id=cfg.repo_id,
-        root=cfg.root,
-        revision=cfg.revision,
         episodes=list(range(num_episodes_to_load)),
         vcodec="auto",
     )

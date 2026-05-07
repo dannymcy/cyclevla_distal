@@ -16,7 +16,6 @@
 
 import logging
 from dataclasses import dataclass, field
-from importlib import import_module
 from typing import Any
 
 import torch
@@ -33,8 +32,6 @@ from lerobot.utils.constants import (
 )
 from lerobot.utils.import_utils import _transformers_available
 from torch import Tensor
-
-PI05_VLM_KEY_PREFIX = "paligemma_with_expert.paligemma."
 
 
 def collect_images(batch: dict[str, Any], image_size: int) -> Tensor:
@@ -66,71 +63,11 @@ def collect_images(batch: dict[str, Any], image_size: int) -> Tensor:
     return images
 
 
-def load_pretrained_vlm_weights(model: nn.Module, pretrained_path: str) -> None:
-    """Load VLM weights from pi0.5 checkpoint into the PaliGemma backbone."""
-    from safetensors.torch import load_file
-    from transformers.utils import cached_file
-
-    logging.info(f"Loading pretrained VLM weights from {pretrained_path}")
-
-    resolved_file = cached_file(pretrained_path, "model.safetensors")
-    if resolved_file is None:
-        raise FileNotFoundError(
-            f"Could not find model.safetensors in {pretrained_path}"
-        )
-    full_state_dict = load_file(resolved_file)
-
-    vlm_state_dict: dict[str, Tensor] = {}
-    for key, value in full_state_dict.items():
-        if not key.startswith(PI05_VLM_KEY_PREFIX):
-            continue
-        new_key = key[len("paligemma_with_expert.") :]
-        vlm_state_dict[new_key] = value
-
-    lm_head_key = "paligemma.lm_head.weight"
-    embed_key = "paligemma.model.language_model.embed_tokens.weight"
-    if lm_head_key in vlm_state_dict and embed_key not in vlm_state_dict:
-        vlm_state_dict[embed_key] = vlm_state_dict[lm_head_key].clone()
-
-    missing, unexpected = model.load_state_dict(vlm_state_dict, strict=False)
-
-    expected_missing = [
-        k for k in missing if k.startswith(("value_head.", "value_bin_support"))
-    ]
-    truly_missing = [k for k in missing if k not in expected_missing]
-
-    loaded_count = len(vlm_state_dict) - len(unexpected)
-    logging.info(
-        f"Pretrained VLM weights: loaded {loaded_count} tensors, "
-        f"{len(expected_missing)} expected-missing (value head), "
-        f"{len(truly_missing)} unexpectedly missing, "
-        f"{len(unexpected)} unexpected."
-    )
-    if truly_missing:
-        logging.warning(f"Unexpectedly missing keys: {truly_missing[:10]}")
-    if unexpected:
-        logging.warning(f"Unexpected keys (not loaded): {unexpected[:10]}")
-
-
 if _transformers_available:
-    from transformers import CONFIG_MAPPING
-    from transformers.models.paligemma.modeling_paligemma import (
-        PaliGemmaForConditionalGeneration,
-    )
+    from transformers import AutoModel, SiglipVisionModel
 else:
-    CONFIG_MAPPING = None
-    PaliGemmaForConditionalGeneration = None
-
-
-def _load_get_gemma_config():
-    try:
-        module = import_module("lerobot.policies.pi05.modeling_pi05")
-    except ModuleNotFoundError:
-        module = import_module("lerobot.policies.pi05_full.modeling_pi05")
-    return module.get_gemma_config
-
-
-get_gemma_config = _load_get_gemma_config()
+    AutoModel = None
+    SiglipVisionModel = None
 
 
 @PreTrainedConfig.register_subclass("recap_value")
@@ -138,21 +75,17 @@ get_gemma_config = _load_get_gemma_config()
 class RECAPValueConfig(PreTrainedConfig):
     """Configuration for the standalone RECAP value network."""
 
-    paligemma_variant: str = "gemma_300m"
+    text_backbone: str = "google/gemma-3-270m"
+    vision_tower: str = "google/siglip-so400m-patch14-224"
     precision: str = "float32"
     image_size: int = 224
-    tokenizer_name: str = "google/paligemma-3b-pt-224"
-    hidden_dim: int = 768
+    hidden_dim: int = 640
     num_value_bins: int = 50
     v_min: float = -1.0
     v_max: float = 0.0
-    freeze_vision_encoder: bool = False
-    freeze_backbone: bool = False
-    num_unfrozen_backbone_layers: int = 0
-    num_vlm_layers: int = 18
     value_head_depth: int = 1
-    dropout: float = 0.1
-    vlm_pretrained_path: str | None = None
+    gradient_checkpointing: bool = False
+    compile_model: bool = False
 
     normalization_mapping: dict[str, NormalizationMode] = field(
         default_factory=lambda: {
@@ -192,85 +125,34 @@ class RECAPValueNetwork(PreTrainedPolicy):
 
     def __init__(self, config: RECAPValueConfig):
         super().__init__(config)
-        if PaliGemmaForConditionalGeneration is None or CONFIG_MAPPING is None:
+        if AutoModel is None or SiglipVisionModel is None:
             raise ImportError(
                 "transformers is required to instantiate RECAPValueNetwork."
             )
 
         self.config = config
-        gemma_config = get_gemma_config(config.paligemma_variant)
+        self.vision_tower = SiglipVisionModel.from_pretrained(config.vision_tower)
+        self.language_model = AutoModel.from_pretrained(config.text_backbone)
 
-        paligemma_config_hf = CONFIG_MAPPING["paligemma"]()
-        paligemma_config_hf._vocab_size = 257152  # noqa: SLF001
-        paligemma_config_hf.image_token_index = 257152
-        paligemma_config_hf.text_config.hidden_size = gemma_config.width
-        paligemma_config_hf.text_config.intermediate_size = gemma_config.mlp_dim
-        paligemma_config_hf.text_config.num_attention_heads = gemma_config.num_heads
-        paligemma_config_hf.text_config.head_dim = gemma_config.head_dim
-        paligemma_config_hf.text_config.num_hidden_layers = gemma_config.depth
-        paligemma_config_hf.text_config.num_key_value_heads = gemma_config.num_kv_heads
-        paligemma_config_hf.text_config.hidden_activation = "gelu_pytorch_tanh"
-        paligemma_config_hf.text_config.torch_dtype = "float32"
-        paligemma_config_hf.text_config.vocab_size = 257152
-        paligemma_config_hf.vision_config.image_size = config.image_size
-        paligemma_config_hf.vision_config.intermediate_size = 4304
-        paligemma_config_hf.vision_config.projection_dim = gemma_config.width
-        paligemma_config_hf.vision_config.projector_hidden_act = "gelu_fast"
-        paligemma_config_hf.vision_config.torch_dtype = "float32"
+        vision_hidden = self.vision_tower.config.hidden_size
+        text_hidden = self.language_model.config.hidden_size
 
-        self.paligemma = PaliGemmaForConditionalGeneration(config=paligemma_config_hf)  # ty: ignore[invalid-argument-type]
+        self.multi_modal_projector = nn.Linear(vision_hidden, text_hidden, bias=True)
 
         if config.precision == "bfloat16":
-            self.paligemma = self.paligemma.to(dtype=torch.bfloat16)  # ty: ignore[missing-argument]
+            dtype = torch.bfloat16
         elif config.precision == "float32":
-            self.paligemma = self.paligemma.to(dtype=torch.float32)  # ty: ignore[missing-argument]
+            dtype = torch.float32
         else:
             raise ValueError(f"Invalid precision: {config.precision}")
+        self.vision_tower = self.vision_tower.to(dtype=dtype)  # ty: ignore[missing-argument]
+        self.language_model = self.language_model.to(dtype=dtype)  # ty: ignore[missing-argument]
+        self.multi_modal_projector = self.multi_modal_projector.to(dtype=dtype)  # ty: ignore[missing-argument]
 
-        lm_inner = self.paligemma.model.language_model
-        if hasattr(lm_inner, "model"):
-            lm_inner = lm_inner.model
-        if config.num_vlm_layers > 0:
-            total_layers = len(lm_inner.layers)
-            if config.num_vlm_layers > total_layers:
-                raise ValueError(
-                    f"num_vlm_layers={config.num_vlm_layers} exceeds "
-                    f"model depth {total_layers}"
-                )
-            lm_inner.layers = lm_inner.layers[: config.num_vlm_layers]
-            logging.info(
-                f"Using first {len(lm_inner.layers)} PaliGemma text layers "
-                "for value network"
-            )
-
-        if config.freeze_backbone:
-            self.paligemma.eval()
-            for param in self.paligemma.parameters():
-                param.requires_grad = False
-            if config.num_unfrozen_backbone_layers > 0:
-                num_layers = len(lm_inner.layers)
-                if config.num_unfrozen_backbone_layers > num_layers:
-                    raise ValueError(
-                        "num_unfrozen_backbone_layers="
-                        f"{config.num_unfrozen_backbone_layers} "
-                        f"exceeds available layers {num_layers}"
-                    )
-                unfrozen_layers = lm_inner.layers[
-                    -config.num_unfrozen_backbone_layers :
-                ]
-                for layer in unfrozen_layers:
-                    layer.train()
-                    for param in layer.parameters():
-                        param.requires_grad = True
-                logging.info(
-                    "Unfreezing last "
-                    f"{config.num_unfrozen_backbone_layers}/{num_layers} "
-                    "backbone transformer layers"
-                )
-        elif config.freeze_vision_encoder:
-            self.paligemma.model.vision_tower.eval()
-            for param in self.paligemma.model.vision_tower.parameters():
-                param.requires_grad = False
+        if config.gradient_checkpointing:
+            self.vision_tower.gradient_checkpointing_enable()
+            self.language_model.gradient_checkpointing_enable()
+            logging.info("Gradient checkpointing enabled for vision tower and LM")
 
         self.register_buffer(
             "value_bin_support",
@@ -286,7 +168,7 @@ class RECAPValueNetwork(PreTrainedPolicy):
         for i in range(config.value_head_depth):
             value_head_layers.append(
                 nn.Linear(
-                    gemma_config.width if i == 0 else config.hidden_dim,
+                    text_hidden if i == 0 else config.hidden_dim,
                     config.hidden_dim,
                 )
             )
@@ -294,8 +176,15 @@ class RECAPValueNetwork(PreTrainedPolicy):
         value_head_layers.append(nn.Linear(config.hidden_dim, config.num_value_bins))
         self.value_head = nn.Sequential(*value_head_layers)
 
-        if config.vlm_pretrained_path:
-            load_pretrained_vlm_weights(self, config.vlm_pretrained_path)
+        if config.compile_model:
+            torch.set_float32_matmul_precision("high")
+            self.forward = torch.compile(  # ty: ignore[invalid-assignment]
+                self.forward, mode="max-autotune"
+            )
+            self.predict_value = torch.compile(  # ty: ignore[invalid-assignment]
+                self.predict_value, mode="max-autotune"
+            )
+            logging.info("Compiled forward and predict_value (mode=max-autotune)")
 
     def get_optim_params(self) -> dict:
         return {"params": [p for p in self.parameters() if p.requires_grad]}
@@ -314,7 +203,7 @@ class RECAPValueNetwork(PreTrainedPolicy):
         outputs = self.compute_outputs(batch)
         return outputs["expected_value"].squeeze(-1)
 
-    def forward(
+    def forward(  # ty: ignore[invalid-method-override]
         self, batch: dict[str, Tensor]
     ) -> tuple[Tensor, dict[str, Tensor] | None]:
         """Compute cross-entropy loss over value bins.
@@ -338,12 +227,13 @@ class RECAPValueNetwork(PreTrainedPolicy):
         images = collect_images(batch, self.config.image_size)
         batch_size, n_cams = images.shape[:2]
 
-        # Paligemma SigLIP image encoder
-        flat_images = images.reshape(batch_size * n_cams, *images.shape[2:]).to(device)
-        image_outputs = self.paligemma.model.get_image_features(flat_images)
-        flat_img_emb = image_outputs.pooler_output
-        if flat_img_emb.ndim == 2:
-            flat_img_emb = flat_img_emb.unsqueeze(1)
+        # SigLIP vision encoder → linear projection into text hidden dim
+        vision_dtype = next(self.vision_tower.parameters()).dtype
+        flat_images = images.reshape(batch_size * n_cams, *images.shape[2:]).to(
+            device=device, dtype=vision_dtype
+        )
+        vision_outputs = self.vision_tower(pixel_values=flat_images)
+        flat_img_emb = self.multi_modal_projector(vision_outputs.last_hidden_state)
         img_token_len = flat_img_emb.shape[1]
         img_emb = flat_img_emb.reshape(
             batch_size, n_cams * img_token_len, flat_img_emb.shape[-1]
@@ -355,7 +245,7 @@ class RECAPValueNetwork(PreTrainedPolicy):
         # Language instruction embedding
         input_ids = batch[OBS_LANGUAGE_TOKENS].to(device)
         attention_mask = batch[OBS_LANGUAGE_ATTENTION_MASK].to(device)
-        lang_emb = self.paligemma.model.language_model.embed_tokens(input_ids)
+        lang_emb = self.language_model.embed_tokens(input_ids)
         text_mask = attention_mask.bool()
 
         # Concat image + language embeddings
@@ -365,20 +255,13 @@ class RECAPValueNetwork(PreTrainedPolicy):
         position_ids = torch.cumsum(full_mask, dim=1) - 1
         position_ids = position_ids.masked_fill(~full_mask, 0).long()
 
-        # Forward pass. The property is called language_model but it is in fact a vlm
-        vlm = self.paligemma.model.language_model
-        text_dtype = next(vlm.parameters()).dtype
-        text_model_inputs = {
-            "inputs_embeds": full_embs.to(dtype=text_dtype),
-            "attention_mask": full_mask,
-            "use_cache": False,
-        }
-        try:
-            text_model_inputs["position_ids"] = position_ids
-            hidden_states = vlm.forward(**text_model_inputs).last_hidden_state
-        except TypeError:
-            text_model_inputs.pop("position_ids", None)
-            hidden_states = vlm.forward(**text_model_inputs).last_hidden_state
+        text_dtype = next(self.language_model.parameters()).dtype
+        hidden_states = self.language_model(
+            inputs_embeds=full_embs.to(dtype=text_dtype),
+            attention_mask=full_mask,
+            position_ids=position_ids,
+            use_cache=False,
+        ).last_hidden_state
 
         seq_lengths = full_mask.sum(dim=1) - 1
         last_token_hidden_state = hidden_states[
@@ -401,14 +284,15 @@ class RECAPValueNetwork(PreTrainedPolicy):
 
 def build_value_preprocessor(
     dataset: Any,
-    paligemma_variant: str,
+    tokenizer_name: str,
     model_precision: str,
     device: str,
 ) -> Any:
-    """Build a pi05-compatible preprocessor for the value network."""
+    """Build a pi05-compatible preprocessor that tokenizes with ``tokenizer_name``."""
     from lerobot.configs.types import FeatureType
     from lerobot.policies.pi05.configuration_pi05 import PI05Config
     from lerobot.policies.pi05.processor_pi05 import make_pi05_pre_post_processors
+    from lerobot.processor import TokenizerProcessorStep
     from lerobot.utils.feature_utils import dataset_to_policy_features
 
     features = dataset_to_policy_features(dataset.meta.features)
@@ -420,7 +304,6 @@ def build_value_preprocessor(
     policy_cfg = PI05Config(
         input_features=input_features,
         output_features=output_features,
-        paligemma_variant=paligemma_variant,
         dtype=model_precision,
         device=device,
     )
@@ -428,4 +311,18 @@ def build_value_preprocessor(
         config=policy_cfg,
         dataset_stats=dataset.meta.stats,
     )
+
+    # Swap the PaliGemma tokenizer step for ``tokenizer_name`` so the produced
+    # OBS_LANGUAGE_TOKENS line up with the value network's text backbone vocab.
+    new_steps = []
+    for step in preprocessor.steps:
+        if isinstance(step, TokenizerProcessorStep):
+            step = TokenizerProcessorStep(
+                tokenizer_name=tokenizer_name,
+                max_length=step.max_length,
+                padding_side=step.padding_side,
+                padding=step.padding,
+            )
+        new_steps.append(step)
+    preprocessor.steps = new_steps
     return preprocessor

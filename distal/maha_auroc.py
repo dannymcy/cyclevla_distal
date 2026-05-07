@@ -5,7 +5,10 @@ per-frame distances, aggregates per episode (mean), and reports AUROC
 against episode success labels.
 """
 
-from dataclasses import dataclass
+import json
+import re
+from dataclasses import dataclass, field
+from importlib.resources import files
 from pathlib import Path
 
 import draccus
@@ -24,19 +27,93 @@ from sklearn.metrics import roc_auc_score
 from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 
-from distal.compute_maha_stats import compute_mahalanobis_np, embed_prefix_pooled
+from distal.collect_libero_plus import sample_task_ids
+from distal.compute_maha_stats import compute_mahalanobis_np, embed_siglip_pooled
+
+PERTURBATION_PATTERNS = {
+    "language": re.compile(r"_language_"),
+    "view": re.compile(r"_view_"),
+    "light": re.compile(r"_light_"),
+    "table": re.compile(r"_(?:table|tb)_\d+"),
+    "add": re.compile(r"_add_\d+"),
+    "level": re.compile(r"_(?:moved_)?level\d+_sample\d+"),
+    "noise": re.compile(r"_noise_\d+"),
+}
+
+
+def perturbation_kinds(variant_name: str) -> set[str]:
+    return {k for k, p in PERTURBATION_PATTERNS.items() if p.search(variant_name)}
+
+
+def replay_variant_names(
+    suites: list[str], per_cell: int, seed: int, max_tasks: int | None
+) -> list[str]:
+    """Reconstruct per-episode variant names from a collect_libero_plus run.
+
+    Mirrors the iteration order of ``distal.collect_libero_plus.main``:
+    ``for suite in suites: for tid in sample_task_ids(suite)[:max_tasks]``.
+    Independent of ``parallel_envs`` since chunking preserves order.
+
+    Note on the off-by-one: ``task_classification.json`` ids are 1-indexed
+    (1..N) but ``LiberoEnv`` indexes ``suite.tasks[task_id]`` zero-indexed,
+    so the variant actually rolled out for ``tid=K`` is ``entries[K]`` (i.e.
+    JSON id=K+1). For ``tid=N`` (max) ``suite.tasks[N]`` is out of range and
+    ``LiberoEnv`` would have crashed at collection time — those tids are
+    skipped here.
+    """
+    classif = json.loads(
+        (files("libero.libero") / "benchmark" / "task_classification.json").read_text()
+    )
+    names: list[str] = []
+    for suite_name in suites:
+        entries = classif[suite_name]
+        ids = sample_task_ids(suite_name, per_cell=per_cell, seed=seed)
+        if max_tasks is not None:
+            ids = ids[:max_tasks]
+        skipped = 0
+        for tid in ids:
+            if tid >= len(entries):
+                skipped += 1
+                continue
+            names.append(entries[tid]["name"])
+        if skipped:
+            print(
+                f"[replay] {suite_name}: skipped {skipped} tid(s) >= "
+                f"{len(entries)} (would have crashed LiberoEnv at collect time)"
+            )
+    return names
 
 
 @dataclass
 class MahaAurocConfig:
-    policy_path: str = "reece-omahoney/adv-libero-base-fixed"
-    dataset_repo_id: str = "reece-omahoney/libero-10"
-    maha_stats_repo_id: str = "reece-omahoney/maha-stats"
-    num_episodes: int = 50
+    policy_path: str = "lerobot/pi05-libero"
+    dataset_repo_id: str = "reece-omahoney/pi05-libero-plus"
+    maha_stats_repo_id: str = "reece-omahoney/pi05-libero-plus-maha-stats-siglip"
+    episodes_per_kind: int = 30
+    min_per_class: int = 10
     device: str = "cuda"
     batch_size: int = 32
     num_workers: int = 4
     seed: int = 42
+
+    # Collection config used to produce dataset_repo_id. Must match the values
+    # passed to distal.collect_libero_plus, otherwise the variant replay will
+    # not align with dataset episode_index.
+    suites: list[str] = field(
+        default_factory=lambda: [
+            "libero_spatial",
+            "libero_object",
+            "libero_goal",
+            "libero_10",
+        ]
+    )
+    per_cell: int = 1
+    collect_seed: int = 0
+    max_tasks: int | None = None
+
+    # Set False for base LIBERO (no perturbations); skips variant replay and
+    # per-kind AUROC, falling back to a balanced sample over all episodes.
+    per_kind: bool = True
 
 
 @draccus.wrap()
@@ -64,16 +141,102 @@ def main(cfg: MahaAurocConfig):
     )
 
     # Load dataset
-    dataset = LeRobotDataset(repo_id=cfg.dataset_repo_id)
+    dataset = LeRobotDataset(repo_id=cfg.dataset_repo_id, vcodec="auto")
     episode_index = np.array(dataset.hf_dataset["episode_index"])
     success = np.array(dataset.hf_dataset["success"])
 
-    # Select shuffled subset of episodes
     unique_episodes = np.unique(episode_index)
+    ep_success_map = {
+        int(ep): bool(success[episode_index == ep][0]) for ep in unique_episodes
+    }
     rng = np.random.default_rng(cfg.seed)
-    rng.shuffle(unique_episodes)
-    selected_episodes = set(unique_episodes[: cfg.num_episodes].tolist())
-    print(f"Selected {len(selected_episodes)} episodes out of {len(unique_episodes)}")
+    selected_episodes: set[int] = set()
+
+    if cfg.per_kind:
+        # Replay collection order to map episode_index -> variant name.
+        variant_names = replay_variant_names(
+            cfg.suites, cfg.per_cell, cfg.collect_seed, cfg.max_tasks
+        )
+        if len(variant_names) != len(unique_episodes):
+            print(
+                f"[replay] WARNING: replay produced {len(variant_names)} variants "
+                f"but dataset has {len(unique_episodes)} episodes. Per-kind AUROC "
+                f"alignment is unreliable — investigate before trusting results."
+            )
+        ep_to_variant = {
+            int(ep): name for ep, name in zip(unique_episodes, variant_names)
+        }
+
+        # Per-kind balanced subsetting: for each perturbation kind, sample up
+        # to episodes_per_kind episodes, half success / half failure. Episodes
+        # can appear in multiple kind buckets (kinds stack), so the unique-
+        # episode union is smaller than 7 * episodes_per_kind.
+        print(
+            f"Per-kind balanced sampling, target {cfg.episodes_per_kind} "
+            f"per kind ({cfg.episodes_per_kind // 2} succ + "
+            f"{cfg.episodes_per_kind - cfg.episodes_per_kind // 2} fail):"
+        )
+        print(f"  {'kind':<10}  {'succ':>5}  {'fail':>5}  {'note':<30}")
+        for kind in PERTURBATION_PATTERNS:
+            succ_pool = np.array(
+                [
+                    ep
+                    for ep in ep_to_variant
+                    if ep_success_map[ep]
+                    and kind in perturbation_kinds(ep_to_variant[ep])
+                ],
+                dtype=int,
+            )
+            fail_pool = np.array(
+                [
+                    ep
+                    for ep in ep_to_variant
+                    if not ep_success_map[ep]
+                    and kind in perturbation_kinds(ep_to_variant[ep])
+                ],
+                dtype=int,
+            )
+            rng.shuffle(succ_pool)
+            rng.shuffle(fail_pool)
+
+            target = cfg.episodes_per_kind
+            n_succ = min(target // 2, len(succ_pool))
+            n_fail = min(target - n_succ, len(fail_pool))
+            n_succ = min(target - n_fail, len(succ_pool))
+            note = ""
+            if min(n_succ, n_fail) < cfg.min_per_class:
+                note = f"BELOW min_per_class={cfg.min_per_class}"
+            print(f"  {kind:<10}  {n_succ:>5}  {n_fail:>5}  {note:<30}")
+
+            for ep in succ_pool[:n_succ].tolist() + fail_pool[:n_fail].tolist():
+                selected_episodes.add(int(ep))
+
+        print(
+            f"\nUnion of per-kind selections: {len(selected_episodes)} unique "
+            f"episodes (out of {len(unique_episodes)} total)"
+        )
+    else:
+        # Base LIBERO: balanced sample over all episodes, no per-kind logic.
+        ep_to_variant = {}
+        succ_pool = np.array(
+            [ep for ep in unique_episodes if ep_success_map[int(ep)]], dtype=int
+        )
+        fail_pool = np.array(
+            [ep for ep in unique_episodes if not ep_success_map[int(ep)]], dtype=int
+        )
+        rng.shuffle(succ_pool)
+        rng.shuffle(fail_pool)
+        target = cfg.episodes_per_kind
+        n_succ = min(target // 2, len(succ_pool))
+        n_fail = min(target - n_succ, len(fail_pool))
+        n_succ = min(target - n_fail, len(succ_pool))
+        print(
+            f"Balanced sampling (no perturbation kinds): "
+            f"{n_succ} succ + {n_fail} fail "
+            f"(out of {len(unique_episodes)} total)"
+        )
+        for ep in succ_pool[:n_succ].tolist() + fail_pool[:n_fail].tolist():
+            selected_episodes.add(int(ep))
 
     # Get frame indices for selected episodes
     frame_mask = np.isin(episode_index, list(selected_episodes))
@@ -110,7 +273,7 @@ def main(cfg: MahaAurocConfig):
         }
         batch = preprocessor(batch)
         with torch.no_grad():
-            emb = embed_prefix_pooled(policy, batch)
+            emb = embed_siglip_pooled(policy, batch)
             dists = compute_mahalanobis_np(emb.cpu().numpy(), gauss_mean, gauss_cov_inv)
         all_dists.extend(dists.tolist())
 
@@ -133,17 +296,44 @@ def main(cfg: MahaAurocConfig):
     n_fail = labels.sum()
     n_success = len(labels) - n_fail
     print(f"\nEpisodes: {len(labels)} ({n_success} success, {n_fail} failure)")
-    succ = scores[~labels]
-    fail = scores[labels]
-    print(f"Mean Maha dist — success: {succ.mean():.2f} ± {succ.std():.2f}")
-    print(f"Mean Maha dist — failure: {fail.mean():.2f} ± {fail.std():.2f}")
 
     if n_fail == 0 or n_success == 0:
         print("Cannot compute AUROC: only one class present.")
         return
+    print(f"AUROC (mean Maha → failure): {roc_auc_score(labels, scores):.4f}")
 
-    auroc = roc_auc_score(labels, scores)
-    print(f"\nAUROC (mean Maha → failure): {auroc:.4f}")
+    if not cfg.per_kind:
+        return
+
+    kinds_per_ep = [
+        perturbation_kinds(ep_to_variant[ep]) if ep in ep_to_variant else None
+        for ep in episodes
+    ]
+    n_unlabeled = sum(1 for k in kinds_per_ep if k is None)
+    if n_unlabeled:
+        print(
+            f"[replay] {n_unlabeled}/{len(episodes)} selected episodes had no "
+            f"replayed variant; excluded from per-kind AUROC."
+        )
+
+    print("\nPer-kind AUROC (episodes containing each kind):")
+    print(f"  {'kind':<10}  {'n':>4}  {'succ':>5}  {'fail':>5}  {'auroc':>8}")
+    for kind in PERTURBATION_PATTERNS:
+        mask = np.array([ks is not None and kind in ks for ks in kinds_per_ep])
+        if mask.sum() == 0:
+            continue
+        sub_labels = labels[mask]
+        sub_scores = scores[mask]
+        n_f = int(sub_labels.sum())
+        n_s = int(len(sub_labels) - n_f)
+        if n_f == 0 or n_s == 0:
+            print(
+                f"  {kind:<10}  {len(sub_labels):>4}  {n_s:>5}  {n_f:>5}  "
+                f"{'-':>8} (single class)"
+            )
+            continue
+        a = roc_auc_score(sub_labels, sub_scores)
+        print(f"  {kind:<10}  {len(sub_labels):>4}  {n_s:>5}  {n_f:>5}  {a:>8.4f}")
 
 
 if __name__ == "__main__":

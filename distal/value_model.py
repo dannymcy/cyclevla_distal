@@ -146,8 +146,8 @@ class RECAPValueNetwork(PreTrainedPolicy):
         else:
             raise ValueError(f"Invalid precision: {config.precision}")
         self.vision_tower = self.vision_tower.to(dtype=dtype)  # ty: ignore[missing-argument]
-        self.language_model = self.language_model.to(dtype=dtype)  # ty: ignore[missing-argument]
-        self.multi_modal_projector = self.multi_modal_projector.to(dtype=dtype)  # ty: ignore[missing-argument]
+        self.language_model = self.language_model.to(dtype=dtype)
+        self.multi_modal_projector = self.multi_modal_projector.to(dtype=dtype)
 
         if config.gradient_checkpointing:
             self.vision_tower.gradient_checkpointing_enable()

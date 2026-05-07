@@ -905,6 +905,20 @@ def _resolve_device(device_str: str) -> torch.device:
     return requested
 
 
+def save_checkpoint(
+    dest: Path,
+    model: RECAPValueNetwork,
+    preprocessor: Any,
+    metrics: dict,
+    cfg: RECAPValueTrainingConfig,
+) -> None:
+    dest.mkdir(parents=True, exist_ok=True)
+    model.save_pretrained(dest)
+    preprocessor.save_pretrained(dest, config_filename="policy_preprocessor.json")
+    _save_json(dest / "metrics.json", metrics)
+    _save_json(dest / "train_config.json", asdict(cfg))
+
+
 @parser.wrap()
 def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
     """Train/validate RECAPValueNetwork with distributional bin supervision."""
@@ -1098,167 +1112,22 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
             "so plotting is disabled."
         )
 
-    best_val_mae = float("inf")
-    patience_counter = 0
-    history: list[dict] = []
-
-    def save_checkpoint_and_check_early_stop(
-        val_metrics: dict[str, float],
-        trigger_tag: str,
-        saved_metrics: dict,
-    ) -> bool:
-        """Save last/best checkpoints; return True iff early stopping should fire."""
-        nonlocal best_val_mae, patience_counter
-
-        last_dir = checkpoints_dir / "last"
-        last_dir.mkdir(parents=True, exist_ok=True)
-        model.save_pretrained(last_dir)
-        preprocessor.save_pretrained(
-            last_dir, config_filename="policy_preprocessor.json"
-        )
-        _save_json(last_dir / "metrics.json", saved_metrics)
-        _save_json(last_dir / "train_config.json", asdict(cfg))
-
-        val_mae = val_metrics.get("value_mae", float("nan"))
-        if math.isnan(val_mae):
-            return False
-
-        if best_val_mae - val_mae > cfg.early_stopping_min_delta:
-            best_val_mae = val_mae
-            patience_counter = 0
-            best_dir = checkpoints_dir / "best"
-            best_dir.mkdir(parents=True, exist_ok=True)
-            model.save_pretrained(best_dir)
-            preprocessor.save_pretrained(
-                best_dir, config_filename="policy_preprocessor.json"
-            )
-            _save_json(best_dir / "metrics.json", saved_metrics)
-            _save_json(best_dir / "train_config.json", asdict(cfg))
-            logging.info(
-                f"[{trigger_tag}] New best val_mae={val_mae:.5f}; "
-                "saved best checkpoint."
-            )
-            return False
-
-        patience_counter += 1
-        patience = cfg.early_stopping_patience
-        if patience is None:
-            return False
-        logging.info(
-            f"[{trigger_tag}] No val_mae improvement "
-            f"({val_mae:.5f} vs best {best_val_mae:.5f}); "
-            f"patience {patience_counter}/{patience}"
-        )
-        if patience_counter >= patience:
-            logging.info(
-                f"[{trigger_tag}] Early stopping triggered after "
-                f"{patience_counter} validations without improvement."
-            )
-            return True
-        return False
-
-    def run_validation_and_maybe_plot(
-        global_step: int, do_plot: bool
-    ) -> dict[str, float]:
-        try:
-            val_metrics = validate(
-                model=model,
-                loader=val_loader,
-                preprocessor=preprocessor,
-                max_steps=cfg.max_val_steps,
-                value_bin_support=model.value_bin_support,
-            )
-        except Exception as error:  # noqa: BLE001
-            if not _is_known_video_validation_error(error):
-                raise
-            logging.warning(
-                f"[step {global_step}] Validation skipped due to persistent "
-                f"video decoding/timestamp errors: {error}"
-            )
-            return {
-                "loss": float("nan"),
-                "bin_acc": float("nan"),
-                "value_mae": float("nan"),
-            }
-
-        logging.info(
-            f"[step {global_step}/{cfg.train_steps}] "
-            f"val_loss={val_metrics['loss']:.5f} "
-            f"val_acc={val_metrics['bin_acc']:.4f} "
-            f"val_mae={val_metrics['value_mae']:.5f}"
-        )
-        if wandb_run is not None:
-            wandb_run.log(
-                {
-                    "val/loss": val_metrics["loss"],
-                    "val/bin_acc": val_metrics["bin_acc"],
-                    "val/value_mae": val_metrics["value_mae"],
-                    "global_step": global_step,
-                },
-                step=global_step,
-            )
-
-        if do_plot and plot_episode_ids and val_plot_loader is not None:
-            collected_predictions: dict[int, list[ValidationFramePrediction]] = {}
-            try:
-                validate(
-                    model=model,
-                    loader=val_plot_loader,
-                    preprocessor=preprocessor,
-                    max_steps=None,
-                    collect_episode_ids=plot_episode_id_set,
-                    value_bin_support=model.value_bin_support,
-                    collected_predictions=collected_predictions,
-                )
-            except Exception as error:  # noqa: BLE001
-                if not _is_known_video_validation_error(error):
-                    raise
-                logging.warning(
-                    f"[step {global_step}] Plot generation skipped due to "
-                    f"video decode/timestamp issue: {error}"
-                )
-                return val_metrics
-
-            plot_dir = output_dir / "validation_plots" / f"step_{global_step:08d}"
-            saved_paths: list[Path] = []
-            for episode_index in plot_episode_ids:
-                episode_predictions = collected_predictions.get(episode_index, [])
-                plot_path = plot_dir / f"episode_{episode_index:05d}.png"
-                did_save = _save_validation_episode_plot(
-                    dataset=dataset,
-                    episode_index=episode_index,
-                    predictions=episode_predictions,
-                    output_path=plot_path,
-                    num_preview_frames=cfg.val_plot_num_frames,
-                    num_value_bins=cfg.num_value_bins,
-                    image_size=cfg.image_size,
-                )
-                if did_save:
-                    saved_paths.append(plot_path)
-            if saved_paths:
-                logging.info(
-                    f"[step {global_step}] Saved {len(saved_paths)} validation "
-                    f"plot(s) under {plot_dir}"
-                )
-                if wandb_run is not None:
-                    import wandb as _wandb
-
-                    plot_images = {
-                        f"val_plots/episode_{p.stem.split('_')[-1]}": _wandb.Image(
-                            str(p)
-                        )
-                        for p in saved_paths
-                    }
-                    wandb_run.log(plot_images, step=global_step)
-
-        return val_metrics
-
     # Need this to prevent hanging
     _default_decoder_cache.clear()
 
     train_iter = cycle(train_loader)
     model.train()
     optimizer.zero_grad(set_to_none=True)
+
+    best_val_mae = float("inf")
+    patience_counter = 0
+    history: list[dict] = []
+    should_stop = False
+    nan_metrics = {
+        "loss": float("nan"),
+        "bin_acc": float("nan"),
+        "value_mae": float("nan"),
+    }
 
     start_time = time.perf_counter()
     last_log_step = 0
@@ -1283,14 +1152,14 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
         if not is_log_step:
             continue
 
+        # ─── Train log ──────────────────────────────────────────────
         now = time.perf_counter()
         elapsed = now - start_time
-        steps_in_window = global_step - last_log_step
         window_elapsed = max(now - last_log_time, 1e-9)
-        steps_per_sec = steps_in_window / window_elapsed
+        steps_per_sec = (global_step - last_log_step) / window_elapsed
         eta = max(cfg.train_steps - global_step, 0) / max(steps_per_sec, 1e-9)
-
         lr = optimizer.param_groups[0]["lr"]
+
         logging.info(
             f"[step {global_step}/{cfg.train_steps}] "
             f"loss={train_metrics['loss']:.5f} "
@@ -1314,17 +1183,105 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
                 step=global_step,
             )
 
+        # ─── Validate ───────────────────────────────────────────────
+        model.eval()
+        try:
+            val_metrics = validate(
+                model=model,
+                loader=val_loader,
+                preprocessor=preprocessor,
+                max_steps=cfg.max_val_steps,
+                value_bin_support=model.value_bin_support,
+            )
+        except Exception as error:  # noqa: BLE001
+            if not _is_known_video_validation_error(error):
+                model.train()
+                raise
+            logging.warning(
+                f"[step {global_step}] Validation skipped due to persistent "
+                f"video decoding/timestamp errors: {error}"
+            )
+            val_metrics = dict(nan_metrics)
+        else:
+            logging.info(
+                f"[step {global_step}/{cfg.train_steps}] "
+                f"val_loss={val_metrics['loss']:.5f} "
+                f"val_acc={val_metrics['bin_acc']:.4f} "
+                f"val_mae={val_metrics['value_mae']:.5f}"
+            )
+            if wandb_run is not None:
+                wandb_run.log(
+                    {
+                        "val/loss": val_metrics["loss"],
+                        "val/bin_acc": val_metrics["bin_acc"],
+                        "val/value_mae": val_metrics["value_mae"],
+                        "global_step": global_step,
+                    },
+                    step=global_step,
+                )
+
+        # ─── Plot pass (separate validation pass over plot episodes) ──
         do_plot = (
             cfg.plot_every_n_train_steps > 0
             and global_step % cfg.plot_every_n_train_steps == 0
             and bool(plot_episode_ids)
+            and val_plot_loader is not None
         )
-        model.eval()
-        val_metrics = run_validation_and_maybe_plot(
-            global_step=global_step, do_plot=do_plot
-        )
+        if do_plot:
+            collected_predictions: dict[int, list[ValidationFramePrediction]] = {}
+            try:
+                validate(
+                    model=model,
+                    loader=val_plot_loader,
+                    preprocessor=preprocessor,
+                    max_steps=None,
+                    collect_episode_ids=plot_episode_id_set,
+                    value_bin_support=model.value_bin_support,
+                    collected_predictions=collected_predictions,
+                )
+            except Exception as error:  # noqa: BLE001
+                if not _is_known_video_validation_error(error):
+                    model.train()
+                    raise
+                logging.warning(
+                    f"[step {global_step}] Plot generation skipped due to "
+                    f"video decode/timestamp issue: {error}"
+                )
+            else:
+                plot_dir = output_dir / "validation_plots" / f"step_{global_step:08d}"
+                saved_paths: list[Path] = []
+                for episode_index in plot_episode_ids:
+                    plot_path = plot_dir / f"episode_{episode_index:05d}.png"
+                    did_save = _save_validation_episode_plot(
+                        dataset=dataset,
+                        episode_index=episode_index,
+                        predictions=collected_predictions.get(episode_index, []),
+                        output_path=plot_path,
+                        num_preview_frames=cfg.val_plot_num_frames,
+                        num_value_bins=cfg.num_value_bins,
+                        image_size=cfg.image_size,
+                    )
+                    if did_save:
+                        saved_paths.append(plot_path)
+                if saved_paths:
+                    logging.info(
+                        f"[step {global_step}] Saved {len(saved_paths)} validation "
+                        f"plot(s) under {plot_dir}"
+                    )
+                    if wandb_run is not None:
+                        import wandb as _wandb
+
+                        plot_images = {
+                            f"val_plots/episode_{p.stem.split('_')[-1]}": (
+                                _wandb.Image(str(p))
+                            )
+                            for p in saved_paths
+                        }
+                        wandb_run.log(plot_images, step=global_step)
+
         model.train()
 
+        # ─── History + checkpoints + early stop ─────────────────────
         saved_metrics = {
             "global_step": global_step,
             "train_loss": train_metrics["loss"],
@@ -1338,11 +1295,38 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
         history.append(saved_metrics)
         _save_json(output_dir / "metrics_history.json", history)
 
-        should_stop = save_checkpoint_and_check_early_stop(
-            val_metrics=val_metrics,
-            trigger_tag=f"step={global_step}/{cfg.train_steps}",
-            saved_metrics=saved_metrics,
+        save_checkpoint(
+            checkpoints_dir / "last", model, preprocessor, saved_metrics, cfg
         )
+
+        trigger_tag = f"step={global_step}/{cfg.train_steps}"
+        val_mae = val_metrics["value_mae"]
+        if not math.isnan(val_mae):
+            if best_val_mae - val_mae > cfg.early_stopping_min_delta:
+                best_val_mae = val_mae
+                patience_counter = 0
+                save_checkpoint(
+                    checkpoints_dir / "best", model, preprocessor, saved_metrics, cfg
+                )
+                logging.info(
+                    f"[{trigger_tag}] New best val_mae={val_mae:.5f}; "
+                    "saved best checkpoint."
+                )
+            else:
+                patience_counter += 1
+                patience = cfg.early_stopping_patience
+                if patience is not None:
+                    logging.info(
+                        f"[{trigger_tag}] No val_mae improvement "
+                        f"({val_mae:.5f} vs best {best_val_mae:.5f}); "
+                        f"patience {patience_counter}/{patience}"
+                    )
+                    if patience_counter >= patience:
+                        logging.info(
+                            f"[{trigger_tag}] Early stopping triggered after "
+                            f"{patience_counter} validations without improvement."
+                        )
+                        should_stop = True
 
         # Reset window AFTER validation/plot/checkpoint so their wall time
         # is not counted as training throughput in the next window.

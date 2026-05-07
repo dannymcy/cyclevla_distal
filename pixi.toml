@@ -9,9 +9,6 @@ version = "0.1.0"
 ffmpeg = ">=8.1.1,<9"
 imagemagick = ">=7.1.2_21,<8"
 
-# Tasks. Python entries run via `uv run` so they pick up the uv-managed
-# `.venv`; pixi's env supplies ffmpeg/imagemagick on PATH.
-
 # Training
 
 [tasks.train]

@@ -93,9 +93,10 @@ class RECAPValueTrainingConfig:
     device: str = "auto"
     log_every_n_steps: int = 100
     plot_every_n_train_steps: int = 200
+    save_every_n_steps: int = 1000
     max_val_steps: int | None = 20
 
-    # Early stopping is counted in validation events, which now coincide with
+    # Early stopping is counted in validation events, which coincide with
     # log steps. With log_every_n_steps=100 and patience=20, that is ~2000
     # train steps without improvement.
     early_stopping_patience: int | None = 20
@@ -110,7 +111,7 @@ class RECAPValueTrainingConfig:
     # Value network architecture (overrides RECAPValueConfig defaults).
     model: RECAPValueConfig = field(
         default_factory=lambda: RECAPValueConfig(
-            gradient_checkpointing=True, compile_model=True
+            gradient_checkpointing=False, compile_model=True
         )
     )
 
@@ -171,6 +172,7 @@ def _is_known_video_validation_error(error: Exception) -> bool:
         or "tolerance_s=" in message
         or "Failed to decode frame" in message
         or "Invalid frame index=" in message
+        or "no more frames left to decode" in message
     )
 
 
@@ -1068,6 +1070,10 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
         raise ValueError(
             f"plot_every_n_train_steps must be >= 0, got {cfg.plot_every_n_train_steps}"
         )
+    if cfg.save_every_n_steps <= 0:
+        raise ValueError(
+            f"save_every_n_steps must be > 0, got {cfg.save_every_n_steps}"
+        )
     if cfg.max_val_steps is not None and cfg.max_val_steps <= 0:
         raise ValueError(
             f"max_val_steps must be > 0 when provided, got {cfg.max_val_steps}"
@@ -1256,9 +1262,13 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
         history.append(saved_metrics)
         _save_json(output_dir / "metrics_history.json", history)
 
-        save_checkpoint(
-            checkpoints_dir / "last", model, preprocessor, saved_metrics, cfg
+        is_save_step = (
+            global_step % cfg.save_every_n_steps == 0 or global_step == cfg.train_steps
         )
+        if is_save_step:
+            save_checkpoint(
+                checkpoints_dir / "last", model, preprocessor, saved_metrics, cfg
+            )
 
         trigger_tag = f"step={global_step}/{cfg.train_steps}"
         val_mae = val_metrics["value_mae"]

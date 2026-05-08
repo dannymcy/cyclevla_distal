@@ -112,7 +112,7 @@ def main() -> None:
 
     num_success = 5
     num_failure = 5
-    num_episodes_to_load = 50
+    num_episodes_to_load = 200
 
     print(
         f"dataset     = {cfg.repo_id} (first {num_episodes_to_load} episodes)\n"

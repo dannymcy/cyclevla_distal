@@ -25,21 +25,22 @@ import math
 import random
 import time
 from collections.abc import Iterator
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, cast
 
+import draccus
 import numpy as np
 import torch
 import torch.nn.functional as F  # noqa: N812
-from huggingface_hub.constants import HF_ASSETS_CACHE
 from lerobot.configs import parser
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.video_utils import _default_decoder_cache
 from lerobot.utils.import_utils import register_third_party_plugins
 from torch.utils.data import DataLoader, Dataset
 
+from distal.rewards.configs import KnnRewardConfig, RewardConfig
 from distal.value_model import (
     RECAPValueConfig,
     RECAPValueNetwork,
@@ -81,7 +82,7 @@ class ValidationFramePrediction:
 class RECAPValueTrainingConfig:
     """Configuration for RECAP value-network train/val."""
 
-    job_name: str = "value-maha-libero-plus-gemma3"
+    job_name: str = "value-knn-libero"
     repo_id: str = "reece-omahoney/pi05-libero-10"
     train_steps: int = 20_000
     batch_size: int = 64
@@ -106,36 +107,8 @@ class RECAPValueTrainingConfig:
     c_fail: float = 50.0
     num_value_bins: int = 201
 
-    # Per-step reward source:
-    #   "steps" = fixed -1
-    #   "maha"  = normalized Mahalanobis distance of each frame's VLM embedding
-    #             from the base training distribution (distal/rewards/maha.py)
-    #   "knn"   = normalized mean kNN distance from each frame's VLM embedding
-    #             to the base demo embeddings (distal/rewards/knn.py)
-    reward_mode: Literal["steps", "maha", "knn"] = "maha"
-    base_policy: str = "lerobot/pi05-libero"
-    maha_stats_path: str = "reece-omahoney/pi05-maha-stats"
-    maha_embed_batch_size: int = 32
-    maha_embed_num_workers: int = 4
-    # Cache computed per-frame rewards locally (HF_ASSETS_CACHE/distal/rewards),
-    # content-addressed by mode + dataset + relevant hyperparams.
-    cache_step_rewards: bool = True
-
-    # kNN-reward knobs (used when reward_mode == "knn"). Defaults match
-    # distal/auroc.py so kNN-AUROC and kNN-reward use the same demo set.
-    knn_k: int = 10
-    knn_metric: str = "l2"  # "l2" or "cosine"
-    knn_chunk_size: int = 256
-    demo_dataset_repo_id: str = "lerobot/libero_10"
-    demo_max_frames: int | None = 50_000
-    demo_subsample_seed: int = 0
-    demo_rename_map: dict[str, str] = field(
-        default_factory=lambda: {
-            "observation.images.front": "observation.images.image",
-            "observation.images.wrist": "observation.images.image2",
-        }
-    )
-    demo_embs_cache_dir: str = str(Path(HF_ASSETS_CACHE) / "distal" / "demo_embs")
+    # Per-step reward source. See RewardConfig subclasses (steps / maha / knn).
+    reward: RewardConfig = field(default_factory=KnnRewardConfig)
 
     # Input processing
     tokenizer_max_length: int = 200
@@ -774,7 +747,7 @@ def _init_wandb(cfg: RECAPValueTrainingConfig) -> Any:
         project=cfg.wandb_project,
         entity=cfg.wandb_entity,
         name=cfg.job_name,
-        config=asdict(cfg),
+        config=draccus.encode(cfg),
     )
     logging.info(f"W&B run: {run.url}")
     return run
@@ -941,7 +914,7 @@ def save_checkpoint(
     model.save_pretrained(dest)
     preprocessor.save_pretrained(dest, config_filename="policy_preprocessor.json")
     _save_json(dest / "metrics.json", metrics)
-    _save_json(dest / "train_config.json", asdict(cfg))
+    _save_json(dest / "train_config.json", draccus.encode(cfg))
 
 
 @parser.wrap()
@@ -959,7 +932,7 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
     checkpoints_dir = output_dir / "checkpoints"
     checkpoints_dir.mkdir(parents=True, exist_ok=True)
 
-    _save_json(output_dir / "train_config.json", asdict(cfg))
+    _save_json(output_dir / "train_config.json", draccus.encode(cfg))
 
     device = _resolve_device(cfg.device)
     logging.info(f"Using device: {device}")
@@ -977,47 +950,7 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
         "from the dataset's 'success' column."
     )
 
-    step_rewards: dict[int, float] | None = None
-    if cfg.reward_mode == "maha":
-        from distal.rewards.maha import load_or_compute_maha_rewards
-
-        logging.info(
-            f"Loading or computing Mahalanobis-distance rewards using "
-            f"{cfg.base_policy} (dataset cache: {dataset.repo_id})..."
-        )
-        step_rewards = load_or_compute_maha_rewards(
-            dataset=dataset,
-            policy_path=cfg.base_policy,
-            stats_path=cfg.maha_stats_path,
-            device=device,
-            batch_size=cfg.maha_embed_batch_size,
-            num_workers=cfg.maha_embed_num_workers,
-            use_cache=cfg.cache_step_rewards,
-        )
-    elif cfg.reward_mode == "knn":
-        from distal.rewards.knn import load_or_compute_knn_rewards
-
-        logging.info(
-            f"Loading or computing kNN-distance rewards using {cfg.base_policy} "
-            f"(demos: {cfg.demo_dataset_repo_id}, k={cfg.knn_k}, "
-            f"metric={cfg.knn_metric}, dataset cache: {dataset.repo_id})..."
-        )
-        step_rewards = load_or_compute_knn_rewards(
-            dataset=dataset,
-            policy_path=cfg.base_policy,
-            device=device,
-            batch_size=cfg.maha_embed_batch_size,
-            num_workers=cfg.maha_embed_num_workers,
-            knn_k=cfg.knn_k,
-            knn_metric=cfg.knn_metric,
-            knn_chunk_size=cfg.knn_chunk_size,
-            demo_dataset_repo_id=cfg.demo_dataset_repo_id,
-            demo_max_frames=cfg.demo_max_frames,
-            demo_subsample_seed=cfg.demo_subsample_seed,
-            demo_rename_map=cfg.demo_rename_map,
-            demo_embs_cache_dir=cfg.demo_embs_cache_dir,
-            use_cache=cfg.cache_step_rewards,
-        )
+    step_rewards = cfg.reward.compute_step_rewards(dataset=dataset, device=device)
 
     frame_targets = _build_frame_targets(
         dataset=dataset,

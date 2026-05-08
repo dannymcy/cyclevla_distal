@@ -116,7 +116,7 @@ def main() -> None:
 
     print(
         f"dataset     = {cfg.repo_id} (first {num_episodes_to_load} episodes)\n"
-        f"reward_mode = {cfg.reward_mode}\n"
+        f"reward      = {cfg.reward.type}\n"
         f"c_fail      = {cfg.c_fail}\n"
         f"device      = {device}"
     )
@@ -128,20 +128,8 @@ def main() -> None:
     )
     success_by_episode = _load_episode_success_from_dataset(dataset)
 
-    step_rewards: dict[int, float] | None = None
-    if cfg.reward_mode == "maha":
-        from distal.rewards.maha import load_or_compute_maha_rewards
-
-        print(f"loading maha rewards (cache: {cfg.repo_id}) ...")
-        step_rewards = load_or_compute_maha_rewards(
-            dataset=dataset,
-            policy_path=cfg.base_policy,
-            stats_path=cfg.maha_stats_path,
-            device=device,
-            batch_size=cfg.maha_embed_batch_size,
-            num_workers=cfg.maha_embed_num_workers,
-            use_cache=False,
-        )
+    cfg.reward.cache = False
+    step_rewards = cfg.reward.compute_step_rewards(dataset=dataset, device=device)
 
     frame_targets = _build_frame_targets(
         dataset=dataset,
@@ -201,7 +189,7 @@ def main() -> None:
         output_path=output_path,
         title=(
             f"ground-truth normalized returns  "
-            f"(reward_mode={cfg.reward_mode}, c_fail={cfg.c_fail}, "
+            f"(reward={cfg.reward.type}, c_fail={cfg.c_fail}, "
             f"num_value_bins={cfg.num_value_bins})"
         ),
     )

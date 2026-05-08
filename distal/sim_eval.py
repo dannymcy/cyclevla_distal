@@ -1,17 +1,17 @@
-"""Shared LIBERO sim-eval helper used by training and standalone eval.
+"""LIBERO sim-eval helpers used by training and standalone eval.
 
-Builds fat ``AsyncVectorEnv``s over LIBERO task IDs, runs
-``lerobot_eval_policy`` per chunk, and returns per-suite + overall metrics.
+Two modes, each with its own config dataclass and entry point:
 
-Two modes, selected by ``is_libero_plus``:
+- :class:`LiberoEvalConfig` + :func:`run_libero_eval` — base LIBERO. Each suite
+  has 10 tasks; each task gets one vec env with ``n_envs_per_task`` sub-envs
+  (distinct ``episode_index`` → distinct init states).
+- :class:`LiberoPlusEvalConfig` + :func:`run_libero_plus_eval` — LIBERO-plus.
+  Each chunk packs up to ``parallel_envs`` distinct task IDs (1 env each) into
+  one fat vec env. ``per_cell`` and ``task_seed`` MUST equal the values used at
+  collect time so eval rolls out the same task IDs that appear in the rollout
+  dataset.
 
-- libero-plus: each chunk packs up to ``parallel_envs`` distinct task IDs
-  (1 env each) into one vec env. Task IDs come from
-  ``sample_task_ids(per_cell, task_seed)`` and match the rollout dataset
-  whenever those knobs match collect's settings.
-- base LIBERO: 10 tasks per suite, each task gets its own vec env with
-  ``n_envs_per_task`` sub-envs (distinct ``episode_index`` → distinct init
-  states).
+Both delegate to a shared :func:`_run_chunks` rollout/metrics loop.
 """
 
 import gc
@@ -19,6 +19,7 @@ import json
 import logging
 import time
 from collections import defaultdict
+from dataclasses import dataclass, field
 from importlib.resources import files
 from pathlib import Path
 
@@ -33,6 +34,43 @@ from distal.collect_libero_plus import (
     make_fat_vec_env,
     sample_task_ids,
 )
+
+
+@dataclass
+class LiberoEvalConfig:
+    """Base LIBERO eval config."""
+
+    suites: list[str] = field(default_factory=lambda: ["libero_10"])
+    fps: int = 20
+    observation_height: int = 256
+    observation_width: int = 256
+    # None → all 10 tasks per suite. e.g. [8] for "put both moka pots on the
+    # stove" in libero_10.
+    task_ids: list[int] | None = None
+    max_tasks: int | None = None
+    # 0 = auto-scale by CPU cores.
+    n_envs_per_task: int = 0
+    n_episodes_per_task: int = 1
+
+
+@dataclass
+class LiberoPlusEvalConfig:
+    """LIBERO-plus eval config."""
+
+    suites: list[str] = field(default_factory=lambda: ["libero_goal"])
+    fps: int = 20
+    observation_height: int = 256
+    observation_width: int = 256
+    per_cell: int = 1
+    task_seed: int = 0
+    # Restrict to a single base task (after stripping perturbation suffixes),
+    # e.g. "turn_on_the_stove". When set, sampled task IDs are filtered to only
+    # those whose base name matches.
+    base_task: str | None = None
+    max_tasks: int | None = None
+    # 0 = auto-scale by CPU cores.
+    parallel_envs: int = 0
+    n_episodes_per_task: int = 1
 
 
 def build_task_id_to_base_task(suites: list[str]) -> dict[int, str]:
@@ -72,38 +110,143 @@ def resolve_eval_task_ids(
     return ids
 
 
-def run_sim_eval(
+def run_libero_eval(
+    cfg: LiberoEvalConfig,
     *,
     policy,
     env_preprocessor,
     env_postprocessor,
     preprocessor,
     postprocessor,
-    suites: list[str],
-    is_libero_plus: bool,
-    fps: int,
-    observation_height: int,
-    observation_width: int,
-    per_cell: int,
-    task_seed: int,
-    base_task: str | None,
-    max_tasks: int | None,
-    parallel_envs: int,
-    n_envs_per_task: int,
-    n_episodes_per_task: int,
     seed: int,
     videos_dir: Path | None = None,
     max_episodes_rendered: int = 4,
     wandb_run=None,
     wandb_step: int | None = None,
 ) -> dict[str, float]:
-    """Run LIBERO sim eval and return per-suite + overall metrics."""
-    parallel_envs = parallel_envs if parallel_envs > 0 else auto_parallel_envs()
-    logging.info(
-        f"Running sim eval (is_libero_plus={is_libero_plus}, "
-        f"parallel_envs={parallel_envs}, n_envs_per_task={n_envs_per_task}, "
-        f"n_ep_per_task={n_episodes_per_task})"
+    """Run base LIBERO eval and return per-suite + overall metrics."""
+    envs_per_task = (
+        cfg.n_envs_per_task if cfg.n_envs_per_task > 0 else auto_parallel_envs()
     )
+
+    plan: list[tuple[str, int, list[int], LiberoEnv, int]] = []
+    for suite_name in cfg.suites:
+        ids = list(cfg.task_ids) if cfg.task_ids is not None else list(range(10))
+        if cfg.max_tasks is not None:
+            ids = ids[: cfg.max_tasks]
+        env_cfg = LiberoEnv(
+            task=suite_name,
+            fps=cfg.fps,
+            observation_height=cfg.observation_height,
+            observation_width=cfg.observation_width,
+            is_libero_plus=False,
+        )
+        for chunk_idx, tid in enumerate(ids):
+            plan.append((suite_name, chunk_idx, [tid], env_cfg, envs_per_task))
+
+    logging.info(
+        f"Running LIBERO eval (suites={cfg.suites}, "
+        f"task_ids={cfg.task_ids}, n_envs_per_task={envs_per_task}, "
+        f"n_ep_per_task={cfg.n_episodes_per_task})"
+    )
+    return _run_chunks(
+        plan=plan,
+        policy=policy,
+        env_preprocessor=env_preprocessor,
+        env_postprocessor=env_postprocessor,
+        preprocessor=preprocessor,
+        postprocessor=postprocessor,
+        n_episodes_per_task=cfg.n_episodes_per_task,
+        seed=seed,
+        videos_dir=videos_dir,
+        max_episodes_rendered=max_episodes_rendered,
+        wandb_run=wandb_run,
+        wandb_step=wandb_step,
+        fps=cfg.fps,
+        task_id_to_base=None,
+    )
+
+
+def run_libero_plus_eval(
+    cfg: LiberoPlusEvalConfig,
+    *,
+    policy,
+    env_preprocessor,
+    env_postprocessor,
+    preprocessor,
+    postprocessor,
+    seed: int,
+    videos_dir: Path | None = None,
+    max_episodes_rendered: int = 4,
+    wandb_run=None,
+    wandb_step: int | None = None,
+) -> dict[str, float]:
+    """Run LIBERO-plus eval and return per-suite + per-base-task + overall metrics."""
+    parallel_envs = cfg.parallel_envs if cfg.parallel_envs > 0 else auto_parallel_envs()
+    task_id_to_base = build_task_id_to_base_task(cfg.suites)
+
+    plan: list[tuple[str, int, list[int], LiberoEnv, int]] = []
+    for suite_name in cfg.suites:
+        ids = resolve_eval_task_ids(
+            suite_name, cfg.per_cell, cfg.task_seed, cfg.base_task, cfg.max_tasks
+        )
+        chunks = [ids[i : i + parallel_envs] for i in range(0, len(ids), parallel_envs)]
+        env_cfg = LiberoEnv(
+            task=suite_name,
+            fps=cfg.fps,
+            observation_height=cfg.observation_height,
+            observation_width=cfg.observation_width,
+            is_libero_plus=True,
+        )
+        for chunk_idx, chunk in enumerate(chunks):
+            plan.append((suite_name, chunk_idx, chunk, env_cfg, 1))
+
+    logging.info(
+        f"Running LIBERO-plus eval (suites={cfg.suites}, "
+        f"per_cell={cfg.per_cell}, task_seed={cfg.task_seed}, "
+        f"base_task={cfg.base_task}, parallel_envs={parallel_envs}, "
+        f"n_ep_per_task={cfg.n_episodes_per_task})"
+    )
+    return _run_chunks(
+        plan=plan,
+        policy=policy,
+        env_preprocessor=env_preprocessor,
+        env_postprocessor=env_postprocessor,
+        preprocessor=preprocessor,
+        postprocessor=postprocessor,
+        n_episodes_per_task=cfg.n_episodes_per_task,
+        seed=seed,
+        videos_dir=videos_dir,
+        max_episodes_rendered=max_episodes_rendered,
+        wandb_run=wandb_run,
+        wandb_step=wandb_step,
+        fps=cfg.fps,
+        task_id_to_base=task_id_to_base,
+    )
+
+
+def _run_chunks(
+    *,
+    plan: list[tuple[str, int, list[int], LiberoEnv, int]],
+    policy,
+    env_preprocessor,
+    env_postprocessor,
+    preprocessor,
+    postprocessor,
+    n_episodes_per_task: int,
+    seed: int,
+    videos_dir: Path | None,
+    max_episodes_rendered: int,
+    wandb_run,
+    wandb_step: int | None,
+    fps: int,
+    task_id_to_base: dict[int, str] | None,
+) -> dict[str, float]:
+    """Shared rollout loop over a pre-built plan.
+
+    If ``task_id_to_base`` is provided, per-base-task metrics are aggregated
+    (libero-plus mode); otherwise only per-suite + overall metrics are reported.
+    """
     policy.eval()
 
     suite_metrics: dict[str, dict[str, list[float]]] = defaultdict(
@@ -112,33 +255,6 @@ def run_sim_eval(
     base_task_metrics: dict[str, dict[str, list[float]]] = defaultdict(
         lambda: {"successes": [], "sum_rewards": []}
     )
-    task_id_to_base = build_task_id_to_base_task(suites) if is_libero_plus else {}
-    plan: list[tuple[str, int, list[int], LiberoEnv, int]] = []
-    for suite_name in suites:
-        if is_libero_plus:
-            ids = resolve_eval_task_ids(
-                suite_name, per_cell, task_seed, base_task, max_tasks
-            )
-            chunks = [
-                ids[i : i + parallel_envs] for i in range(0, len(ids), parallel_envs)
-            ]
-            envs_per_task = 1
-        else:
-            ids = list(range(10))
-            if max_tasks is not None:
-                ids = ids[:max_tasks]
-            chunks = [[tid] for tid in ids]
-            envs_per_task = n_envs_per_task if n_envs_per_task > 0 else parallel_envs
-
-        env_cfg = LiberoEnv(
-            task=suite_name,
-            fps=fps,
-            observation_height=observation_height,
-            observation_width=observation_width,
-            is_libero_plus=is_libero_plus,
-        )
-        for chunk_idx, chunk in enumerate(chunks):
-            plan.append((suite_name, chunk_idx, chunk, env_cfg, envs_per_task))
 
     total_chunks = len(plan)
     total_episodes = sum(
@@ -192,7 +308,7 @@ def run_sim_eval(
                     sum_r = float(ep["sum_reward"])
                     suite_metrics[suite_name]["successes"].append(s)
                     suite_metrics[suite_name]["sum_rewards"].append(sum_r)
-                    if is_libero_plus:
+                    if task_id_to_base is not None:
                         # Episodes are produced in batch-major order over envs;
                         # env e in any batch corresponds to chunk[e].
                         tid = chunk[i % len(chunk)]

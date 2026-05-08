@@ -115,14 +115,14 @@ def main() -> None:
     num_episodes_to_load = 200
 
     print(
-        f"dataset     = {cfg.repo_id} (first {num_episodes_to_load} episodes)\n"
+        f"dataset     = {cfg.dataset_repo_id} (first {num_episodes_to_load} episodes)\n"
         f"reward      = {cfg.reward.type}\n"
         f"c_fail      = {cfg.c_fail}\n"
         f"device      = {device}"
     )
 
     dataset = LeRobotDataset(
-        repo_id=cfg.repo_id,
+        repo_id=cfg.dataset_repo_id,
         episodes=list(range(num_episodes_to_load)),
         vcodec="auto",
     )

@@ -54,7 +54,12 @@ from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader
 
 from distal import advantage_cache
-from distal.sim_eval import resolve_eval_task_ids, run_sim_eval
+from distal.sim_eval import (
+    LiberoEvalConfig,
+    LiberoPlusEvalConfig,
+    run_libero_eval,
+    run_libero_plus_eval,
+)
 from distal.train_value import (
     FrameTarget,
     build_frame_targets,
@@ -79,7 +84,7 @@ class AdvantageConfig:
     runtime and are not user-facing knobs.
     """
 
-    value_network_pretrained_path: str = "reece-omahoney/value-maha-libero-plus"
+    value_network_pretrained_path: str = "reece-omahoney/value-knn-libero"
 
     # When set, override ``policy.advantage_threshold`` with the Nth percentile
     # of the precomputed advantage distribution (~30% positive at p=70).
@@ -98,18 +103,18 @@ class AdvantageConfig:
 class RECAPPiStarTrainingConfig:
     """Configuration for RECAP PiStar06 advantage-conditioned Pi0.5 policy training."""
 
-    job_name: str = "pistar06-libero-plus-maha"
-    repo_id: str = "reece-omahoney/pi05-libero-plus"
+    job_name: str = "pistar-knn-libero"
+    dataset_repo_id: str = "reece-omahoney/pi05-libero-10"
 
     train_steps: int = 20_000
     batch_size: int = 64
     num_workers: int = 8
     val_split_ratio: float = 0.1
     seed: int = 42
-    device: str = "auto"
+    device: str = "cuda"
     log_every_n_steps: int = 100
     max_val_steps: int | None = 50
-    sim_eval_every_n_train_steps: int = 500
+    sim_eval_every_n_train_steps: int = 1000
 
     policy: PiStar06Config = field(
         default_factory=lambda: PiStar06Config(
@@ -122,34 +127,12 @@ class RECAPPiStarTrainingConfig:
     )
     advantage: AdvantageConfig = field(default_factory=AdvantageConfig)
 
-    # Sim eval — fat AsyncVectorEnv eval over LIBERO suites.  Two modes:
-    #
-    # - is_libero_plus=True (default): mirrors ``distal/collect_libero_plus.py``.
-    #   Each chunk packs up to ``eval_parallel_envs`` distinct task IDs (1 env
-    #   each) into one vec env. ``eval_per_cell`` and ``eval_task_seed`` MUST
-    #   equal the values used at collect time so eval rolls out the same task
-    #   IDs that appear in the rollout dataset (defaults match collect's
-    #   per_cell=1, seed=0).
-    # - is_libero_plus=False: standard LIBERO eval. Each suite has 10 tasks;
-    #   each task gets its own vec env with ``eval_n_envs_per_task`` sub-envs
-    #   (distinct ``episode_index`` → distinct init states).
-    #
-    # Set sim_eval_every_n_train_steps=0 to disable sim eval entirely.
-    is_libero_plus: bool = True
-    eval_suites: list[str] = field(default_factory=lambda: ["libero_goal"])
-    eval_fps: int = 20
-    eval_observation_height: int = 256
-    eval_observation_width: int = 256
-    eval_per_cell: int = 1
-    eval_task_seed: int = 0
-    eval_max_tasks: int | None = None
-    # libero-plus only: restrict eval to a single base task (after stripping
-    # perturbation suffixes), e.g. "turn_on_the_stove". When set, sampled task
-    # IDs are filtered to only those whose base name matches.
-    eval_base_task: str | None = "turn_on_the_stove"
-    eval_parallel_envs: int = 0  # libero-plus only; 0 = auto-scale by CPU cores
-    eval_n_envs_per_task: int = 0  # base-LIBERO only
-    eval_n_episodes_per_task: int = 1
+    # Sim eval
+    eval_cfg: LiberoEvalConfig | LiberoPlusEvalConfig = field(
+        default_factory=lambda: LiberoEvalConfig(
+            suites=["libero_10"], task_ids=[8], n_envs_per_task=50
+        )
+    )
 
     # Hub push for trained policy
     push_to_hub: bool = True
@@ -637,7 +620,8 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
     output_dir = Path("outputs/pistar") / datetime.now().strftime("%Y-%m-%d/%H-%M-%S")
     checkpoints_dir = output_dir / "checkpoints"
     checkpoints_dir.mkdir(parents=True, exist_ok=True)
-    write_json(asdict(cfg), output_dir / "train_config.json")
+    with open(output_dir / "train_config.json", "w") as f:
+        json.dump(asdict(cfg), f, indent=4, default=str)
 
     device = get_safe_torch_device(cfg.device, log=True)
     logging.info(f"Using device: {device}")
@@ -645,10 +629,7 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
     wandb_run = _init_wandb(cfg)
 
     # ── 1. Load dataset and build episode-level train/val split ──────────
-    full_dataset = LeRobotDataset(
-        repo_id=cfg.repo_id,
-        vcodec="auto",
-    )
+    full_dataset = LeRobotDataset(repo_id=cfg.dataset_repo_id, vcodec="auto")
 
     success_by_episode = load_episode_success_from_dataset(full_dataset)
     logging.info(
@@ -745,7 +726,7 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
     # ── 3. Pre-compute advantages using Pi0.5-based value network ────────
     if cfg.policy.enable_advantage_conditioning:
         signature = advantage_cache.compute_signature(
-            dataset_repo_id=cfg.repo_id,
+            dataset_repo_id=cfg.dataset_repo_id,
             value_network_pretrained_path=cfg.advantage.value_network_pretrained_path,
             c_fail=c_fail,
             num_value_bins=num_value_bins,
@@ -783,7 +764,7 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
                         "num_value_bins": num_value_bins,
                         "reward_mode": vn_reward_mode,
                         "maha_stats_path": vn_maha_stats_path,
-                        "repo_id": cfg.repo_id,
+                        "dataset_repo_id": cfg.dataset_repo_id,
                         "success_by_episode": success_by_episode,
                     },
                 )
@@ -814,13 +795,13 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
         torch.cuda.empty_cache()
 
     train_dataset = LeRobotDataset(
-        repo_id=cfg.repo_id,
+        repo_id=cfg.dataset_repo_id,
         episodes=train_ep_ids,
         delta_timestamps=delta_timestamps,
         vcodec="auto",
     )
     val_dataset = LeRobotDataset(
-        repo_id=cfg.repo_id,
+        repo_id=cfg.dataset_repo_id,
         episodes=val_ep_ids,
         delta_timestamps=delta_timestamps,
         vcodec="auto",
@@ -892,39 +873,19 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
     env_preprocessor = None
     env_postprocessor = None
     if cfg.sim_eval_every_n_train_steps > 0:
+        is_libero_plus = isinstance(cfg.eval_cfg, LiberoPlusEvalConfig)
         rep_env_cfg = LiberoEnv(
-            task=cfg.eval_suites[0],
-            fps=cfg.eval_fps,
-            observation_height=cfg.eval_observation_height,
-            observation_width=cfg.eval_observation_width,
-            is_libero_plus=cfg.is_libero_plus,
+            task=cfg.eval_cfg.suites[0],
+            fps=cfg.eval_cfg.fps,
+            observation_height=cfg.eval_cfg.observation_height,
+            observation_width=cfg.eval_cfg.observation_width,
+            is_libero_plus=is_libero_plus,
         )
         env_preprocessor, env_postprocessor = make_env_pre_post_processors(
             env_cfg=rep_env_cfg, policy_cfg=policy_cfg
         )
-        if cfg.is_libero_plus:
-            logging.info(
-                f"LIBERO-plus sim eval every {cfg.sim_eval_every_n_train_steps} "
-                f"steps (suites={cfg.eval_suites}, per_cell={cfg.eval_per_cell}, "
-                f"task_seed={cfg.eval_task_seed}, "
-                f"base_task={cfg.eval_base_task})"
-            )
-            for suite in cfg.eval_suites:
-                ids = resolve_eval_task_ids(
-                    suite,
-                    per_cell=cfg.eval_per_cell,
-                    task_seed=cfg.eval_task_seed,
-                    base_task=cfg.eval_base_task,
-                    max_tasks=cfg.eval_max_tasks,
-                )
-                logging.info(f"  {suite}: {len(ids)} task IDs")
-        else:
-            logging.info(
-                f"Base LIBERO sim eval every {cfg.sim_eval_every_n_train_steps} "
-                f"steps (suites={cfg.eval_suites}, "
-                f"n_envs_per_task={cfg.eval_n_envs_per_task}, "
-                f"n_ep_per_task={cfg.eval_n_episodes_per_task})"
-            )
+        mode = "LIBERO-plus" if is_libero_plus else "LIBERO"
+        logging.info(f"{mode} sim eval every {cfg.sim_eval_every_n_train_steps} steps")
 
     # ── 6. Create dataloaders ────────────────────────────────────────────
     train_sampler = None
@@ -1052,29 +1013,32 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
             cfg.sim_eval_every_n_train_steps > 0
             and global_step % cfg.sim_eval_every_n_train_steps == 0
         ):
-            step_eval_metrics = run_sim_eval(
-                policy=policy,
-                env_preprocessor=env_preprocessor,
-                env_postprocessor=env_postprocessor,
-                preprocessor=preprocessor,
-                postprocessor=postprocessor,
-                suites=cfg.eval_suites,
-                is_libero_plus=cfg.is_libero_plus,
-                fps=cfg.eval_fps,
-                observation_height=cfg.eval_observation_height,
-                observation_width=cfg.eval_observation_width,
-                per_cell=cfg.eval_per_cell,
-                task_seed=cfg.eval_task_seed,
-                base_task=cfg.eval_base_task,
-                max_tasks=cfg.eval_max_tasks,
-                parallel_envs=cfg.eval_parallel_envs,
-                n_envs_per_task=cfg.eval_n_envs_per_task,
-                n_episodes_per_task=cfg.eval_n_episodes_per_task,
-                seed=cfg.seed,
-                videos_dir=output_dir / "eval" / f"videos_step_{global_step}",
-                wandb_run=wandb_run,
-                wandb_step=global_step,
-            )
+            if isinstance(cfg.eval_cfg, LiberoPlusEvalConfig):
+                step_eval_metrics = run_libero_plus_eval(
+                    cfg.eval_cfg,
+                    policy=policy,
+                    env_preprocessor=env_preprocessor,
+                    env_postprocessor=env_postprocessor,
+                    preprocessor=preprocessor,
+                    postprocessor=postprocessor,
+                    seed=cfg.seed,
+                    videos_dir=output_dir / "eval" / f"videos_step_{global_step}",
+                    wandb_run=wandb_run,
+                    wandb_step=global_step,
+                )
+            else:
+                step_eval_metrics = run_libero_eval(
+                    cfg.eval_cfg,
+                    policy=policy,
+                    env_preprocessor=env_preprocessor,
+                    env_postprocessor=env_postprocessor,
+                    preprocessor=preprocessor,
+                    postprocessor=postprocessor,
+                    seed=cfg.seed,
+                    videos_dir=output_dir / "eval" / f"videos_step_{global_step}",
+                    wandb_run=wandb_run,
+                    wandb_step=global_step,
+                )
             wandb_step_metrics.update(
                 {f"eval/{k}": v for k, v in step_eval_metrics.items()}
             )

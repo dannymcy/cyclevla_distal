@@ -2,8 +2,8 @@
 
 Mirrors the sim-eval env setup used inside ``distal.train_pi_star`` so a
 trained checkpoint can be re-evaluated without re-running the training loop.
-Delegates all rollout logic to ``distal.sim_eval.run_sim_eval``; this script
-only handles policy loading, preprocessor wiring, and writing the
+Delegates rollout logic to ``distal.sim_eval.run_libero_plus_eval``; this
+script only handles policy loading, preprocessor wiring, and writing the
 ``summary.json`` artifact.
 """
 
@@ -28,7 +28,7 @@ from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.random_utils import set_seed
 from lerobot.utils.utils import init_logging
 
-from distal.sim_eval import run_sim_eval
+from distal.sim_eval import LiberoPlusEvalConfig, run_libero_plus_eval
 
 
 @dataclass
@@ -39,23 +39,9 @@ class EvalLiberoPlusConfig:
     device: str = "cuda"
     seed: int = 42
 
-    # Env knobs (must match the values used at collect time so eval rolls out
-    # the same task IDs that appear in the rollout dataset).
-    suites: list[str] = field(default_factory=lambda: ["libero_goal"])
-    fps: int = 20
-    observation_height: int = 256
-    observation_width: int = 256
-    per_cell: int = 1
-    task_seed: int = 0
-
-    # Optional task-set restrictions.
-    base_task: str | None = "turn_on_the_stove"
-    max_tasks: int | None = None
-
-    # Parallelism: 0 = auto-scale by CPU cores. Each chunk packs up to
-    # ``parallel_envs`` distinct task IDs into one fat vec env.
-    parallel_envs: int = 0
-    n_episodes_per_task: int = 1
+    eval: LiberoPlusEvalConfig = field(
+        default_factory=lambda: LiberoPlusEvalConfig(base_task="turn_on_the_stove")
+    )
 
     output_dir: str | None = None
     max_episodes_rendered: int = 4
@@ -72,10 +58,10 @@ def main(cfg: EvalLiberoPlusConfig):
     set_seed(cfg.seed)
 
     rep_env_cfg = LiberoEnv(
-        task=cfg.suites[0],
-        fps=cfg.fps,
-        observation_height=cfg.observation_height,
-        observation_width=cfg.observation_width,
+        task=cfg.eval.suites[0],
+        fps=cfg.eval.fps,
+        observation_height=cfg.eval.observation_height,
+        observation_width=cfg.eval.observation_width,
         is_libero_plus=True,
     )
 
@@ -104,24 +90,13 @@ def main(cfg: EvalLiberoPlusConfig):
     output_dir.mkdir(parents=True, exist_ok=True)
     logging.info(f"Output dir: {output_dir}")
 
-    metrics = run_sim_eval(
+    metrics = run_libero_plus_eval(
+        cfg.eval,
         policy=policy,
         env_preprocessor=env_preprocessor,
         env_postprocessor=env_postprocessor,
         preprocessor=preprocessor,
         postprocessor=postprocessor,
-        suites=cfg.suites,
-        is_libero_plus=True,
-        fps=cfg.fps,
-        observation_height=cfg.observation_height,
-        observation_width=cfg.observation_width,
-        per_cell=cfg.per_cell,
-        task_seed=cfg.task_seed,
-        base_task=cfg.base_task,
-        max_tasks=cfg.max_tasks,
-        parallel_envs=cfg.parallel_envs,
-        n_envs_per_task=1,
-        n_episodes_per_task=cfg.n_episodes_per_task,
         seed=cfg.seed,
         videos_dir=output_dir / "videos",
         max_episodes_rendered=cfg.max_episodes_rendered,

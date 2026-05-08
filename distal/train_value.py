@@ -82,8 +82,8 @@ class ValidationFramePrediction:
 class RECAPValueTrainingConfig:
     """Configuration for RECAP value-network train/val."""
 
-    job_name: str = "value-knn-libero"
-    repo_id: str = "reece-omahoney/pi05-libero-10"
+    job_name: str = "value-knn-libero-plus"
+    dataset_repo_id: str = "reece-omahoney/pi05-libero-plus"
     train_steps: int = 20_000
     batch_size: int = 64
     num_workers: int = 8
@@ -106,7 +106,11 @@ class RECAPValueTrainingConfig:
     c_fail: float = 50.0
 
     # Per-step reward source. See RewardConfig subclasses (steps / maha / knn).
-    reward: RewardConfig = field(default_factory=KnnRewardConfig)
+    reward: RewardConfig = field(
+        default_factory=lambda: KnnRewardConfig(
+            demo_dataset_repo_id="lerobot/libero_plus"
+        )
+    )
 
     # Value network architecture (overrides RECAPValueConfig defaults).
     model: RECAPValueConfig = field(
@@ -738,10 +742,7 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
         )
         logging.info(f"W&B run: {wandb_run.url}")
 
-    dataset = LeRobotDataset(
-        repo_id=cfg.repo_id,
-        vcodec="auto",
-    )
+    dataset = LeRobotDataset(repo_id=cfg.dataset_repo_id, vcodec="auto")
 
     success_by_episode = load_episode_success_from_dataset(dataset)
     logging.info(

@@ -1,30 +1,26 @@
 """Quick diagnostic: compute kNN-to-demo distances on the value-training
 dataset and print distribution stats to understand reward shape.
 
-Mirrors the policy/embedding/dataset wiring used in maha_auroc.py: per-frame
-score = mean distance to the k nearest demo embeddings, optionally pooled
-per-camera.
+Mirrors the policy/embedding/dataset wiring used in auroc.py: per-frame
+score = mean distance to the k nearest demo embeddings.
 """
 
-import dataclasses
 import logging
 from pathlib import Path
 
+import draccus
 import numpy as np
 import torch
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.policies.factory import make_policy, make_pre_post_processors
 from lerobot.policies.pi05.modeling_pi05 import PI05Policy
+from lerobot.utils.device_utils import get_safe_torch_device
 from lerobot.utils.import_utils import register_third_party_plugins
+from torch.utils.data import Subset
 
-from distal.maha_auroc import (
-    MahaAurocConfig,
-    embed_dataset,
-    knn_distances,
-    load_or_embed_demos,
-)
-from distal.train_value import RECAPValueTrainingConfig
+from distal.auroc import AurocConfig
+from distal.knn_reward import embed_dataset, knn_distances, load_or_embed_demos
 
 
 def percentile_table(values: np.ndarray, label: str) -> None:
@@ -117,37 +113,56 @@ def ascii_histogram(values: np.ndarray, bins: int = 20, width: int = 50) -> None
         print(f"  [{lo:8.4f}, {hi:8.4f}]  {c:7d}  {bar}")
 
 
-def main() -> None:
+@draccus.wrap()
+def main(cfg: AurocConfig) -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     register_third_party_plugins()
 
-    cfg = RECAPValueTrainingConfig()
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = get_safe_torch_device(cfg.device, log=True)
 
-    # kNN scoring config — mirrors MahaAurocConfig defaults so this script
-    # reflects the same scoring used in the AUROC diagnostic.
-    knn_cfg = dataclasses.replace(
-        MahaAurocConfig(),
-        policy_path=cfg.base_policy,
-        batch_size=cfg.maha_embed_batch_size,
-        num_workers=cfg.maha_embed_num_workers,
-    )
-
-    num_episodes = 50
-    episodes = list(range(num_episodes))
     print(
-        f"dataset       = {cfg.repo_id} (first {num_episodes} episodes)\n"
-        f"base_policy   = {cfg.base_policy}\n"
-        f"demo_dataset  = {knn_cfg.demo_dataset_repo_id}\n"
-        f"knn           = k={knn_cfg.knn_k} metric={knn_cfg.knn_metric}\n"
+        f"dataset       = {cfg.dataset_repo_id}\n"
+        f"base_policy   = {cfg.policy_path}\n"
+        f"demo_dataset  = {cfg.demo_dataset_repo_id}\n"
+        f"knn           = k={cfg.knn_k} metric={cfg.knn_metric}\n"
         f"device        = {device}"
     )
 
-    dataset = LeRobotDataset(repo_id=cfg.repo_id, episodes=episodes, vcodec="auto")
-    print(f"frames = {len(dataset.hf_dataset)}  episodes = {len(episodes)}")
+    dataset = LeRobotDataset(repo_id=cfg.dataset_repo_id, vcodec="auto")
+    full_episode_index = np.array(dataset.hf_dataset["episode_index"])
+    full_success = np.array(dataset.hf_dataset["success"])
+    unique_episodes = np.unique(full_episode_index)
+    ep_success_map = {
+        int(ep): bool(full_success[full_episode_index == ep][0])
+        for ep in unique_episodes
+    }
 
-    policy_cfg = PreTrainedConfig.from_pretrained(cfg.base_policy)
-    policy_cfg.pretrained_path = Path(cfg.base_policy)
+    rng = np.random.default_rng(cfg.seed)
+    succ_pool = np.array(
+        [ep for ep in unique_episodes if ep_success_map[int(ep)]], dtype=int
+    )
+    fail_pool = np.array(
+        [ep for ep in unique_episodes if not ep_success_map[int(ep)]], dtype=int
+    )
+    rng.shuffle(succ_pool)
+    rng.shuffle(fail_pool)
+    target = cfg.episodes_per_kind
+    n_succ = min(target // 2, len(succ_pool))
+    n_fail = min(target - n_succ, len(fail_pool))
+    n_succ = min(target - n_fail, len(succ_pool))
+    selected_episodes = set(succ_pool[:n_succ].tolist() + fail_pool[:n_fail].tolist())
+    print(
+        f"balanced sampling: {n_succ} succ + {n_fail} fail "
+        f"(out of {len(unique_episodes)} total)"
+    )
+
+    frame_mask = np.isin(full_episode_index, list(selected_episodes))
+    frame_indices = np.where(frame_mask)[0]
+    subset = Subset(dataset, frame_indices.tolist())
+    print(f"frames = {len(subset)}  episodes = {len(selected_episodes)}")
+
+    policy_cfg = PreTrainedConfig.from_pretrained(cfg.policy_path)
+    policy_cfg.pretrained_path = Path(cfg.policy_path)
     policy_cfg.device = str(device)
     policy = make_policy(cfg=policy_cfg, ds_meta=dataset.meta)
     assert isinstance(policy, PI05Policy)
@@ -156,14 +171,26 @@ def main() -> None:
         policy_cfg=policy_cfg, pretrained_path=str(policy_cfg.pretrained_path)
     )
 
-    demo_embs = load_or_embed_demos(knn_cfg, policy, policy_cfg, device)
+    demo_embs = load_or_embed_demos(
+        policy=policy,
+        policy_cfg=policy_cfg,
+        device=device,
+        policy_path=cfg.policy_path,
+        demo_dataset_repo_id=cfg.demo_dataset_repo_id,
+        demo_max_frames=cfg.demo_max_frames,
+        demo_subsample_seed=cfg.demo_subsample_seed,
+        demo_rename_map=cfg.demo_rename_map,
+        batch_size=cfg.batch_size,
+        num_workers=cfg.num_workers,
+        cache_dir=cfg.demo_embs_cache_dir,
+    )
 
     rollout_embs = embed_dataset(
         policy=policy,
         preprocessor=preprocessor,
-        dataset=dataset,
-        batch_size=knn_cfg.batch_size,
-        num_workers=knn_cfg.num_workers,
+        dataset=subset,
+        batch_size=cfg.batch_size,
+        num_workers=cfg.num_workers,
         device=device,
         max_frames=None,
         subsample_seed=0,
@@ -177,9 +204,9 @@ def main() -> None:
     distances = knn_distances(
         query=rollout_embs,
         demos=demo_embs,
-        k=knn_cfg.knn_k,
-        metric=knn_cfg.knn_metric,
-        chunk_size=knn_cfg.knn_chunk_size,
+        k=cfg.knn_k,
+        metric=cfg.knn_metric,
+        chunk_size=cfg.knn_chunk_size,
         device=device,
     ).astype(np.float64)
 
@@ -195,7 +222,7 @@ def main() -> None:
 
     # Per-episode mean raw distance — shows whether episodes differ from each
     # other (between-episode variation) vs. within-episode variation.
-    ep_indices = np.asarray(dataset.hf_dataset["episode_index"], dtype=np.int64)
+    ep_indices = full_episode_index[frame_indices].astype(np.int64)
     per_ep_means = []
     for ep in np.unique(ep_indices):
         per_ep_means.append(distances[ep_indices == ep].mean())
@@ -221,7 +248,7 @@ def main() -> None:
     np.save(out, distances)
     print(f"\nsaved raw distances -> {out}")
 
-    success = np.asarray(dataset.hf_dataset["success"], dtype=bool)
+    success = full_success[frame_indices].astype(bool)
     plot_all_episodes(
         distances=distances,
         normalized=normalized,

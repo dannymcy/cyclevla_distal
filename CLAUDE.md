@@ -28,7 +28,7 @@ uv run python -m distal.collect_libero_plus
 uv run python -m distal.compute_maha_stats      # mean / cov_inv from base-dataset embeddings
 uv run python -m distal.train_value             # distributional value network
 uv run python -m distal.train_pi_star           # advantage-conditioned Pi0.5 fine-tune
-uv run python -m distal.maha_auroc              # Mahalanobis distance AUROC vs episode success
+uv run python -m distal.auroc                   # Mahalanobis / kNN AUROC vs episode success
 uv run python -m distal.eval_guidance           # sweep guidance scales
 
 # Hardware (Piper)
@@ -46,7 +46,7 @@ uv run slurm gui [stop]                  # Flask job-monitor daemon
 uv run pre-commit run --all-files        # ruff (E,F,I + format), check-toml/yaml, mdformat --wrap 80, ty
 ```
 
-No formal test suite — verification is via `pixi run eval` and the `maha_auroc`
+No formal test suite — verification is via `pixi run eval` and the `auroc`
 diagnostic.
 
 ## Conventions
@@ -111,7 +111,7 @@ auto-set to a per-task percentile during training), `advantage_dropout` (CFG).
 - `maha_reward.py` — Loads stats from `compute_maha_stats.py`, computes per-
   frame Mahalanobis distances on a value-training dataset, min-max normalizes to
   `[-1, 0]` for use as per-step rewards.
-- `maha_auroc.py` — Evaluates Mahalanobis distance as a failure predictor:
+- `auroc.py` — Evaluates Mahalanobis or kNN distance as a failure predictor:
   per-frame distances → episode-mean → AUROC vs `success` labels.
 - `advantage_cache.py` — Content-addressed cache for precomputed advantages,
   Hub-mirrored.

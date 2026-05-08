@@ -25,7 +25,7 @@ import math
 import random
 import time
 from collections.abc import Iterator
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -33,6 +33,7 @@ from typing import Any, Literal, cast
 import numpy as np
 import torch
 import torch.nn.functional as F  # noqa: N812
+from huggingface_hub.constants import HF_ASSETS_CACHE
 from lerobot.configs import parser
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.video_utils import _default_decoder_cache
@@ -104,16 +105,36 @@ class RECAPValueTrainingConfig:
     c_fail: float = 50.0
     num_value_bins: int = 201
 
-    # Per-step reward source: "steps" = fixed -1, "maha" = normalized
-    # Mahalanobis distance of each frame's VLM embedding from the base
-    # training distribution (see distal/maha_reward.py).
-    reward_mode: Literal["steps", "maha"] = "maha"
+    # Per-step reward source:
+    #   "steps" = fixed -1
+    #   "maha"  = normalized Mahalanobis distance of each frame's VLM embedding
+    #             from the base training distribution (distal/maha_reward.py)
+    #   "knn"   = normalized mean kNN distance from each frame's VLM embedding
+    #             to the base demo embeddings (distal/knn_reward.py)
+    reward_mode: Literal["steps", "maha", "knn"] = "maha"
     base_policy: str = "lerobot/pi05-libero"
     maha_stats_path: str = "reece-omahoney/pi05-maha-stats"
     maha_embed_batch_size: int = 32
     maha_embed_num_workers: int = 4
-    # Upload computed maha rewards to the dataset repo for reuse on later runs.
-    cache_maha_rewards: bool = True
+    # Cache computed per-frame rewards locally (HF_ASSETS_CACHE/distal/rewards),
+    # content-addressed by mode + dataset + relevant hyperparams.
+    cache_step_rewards: bool = True
+
+    # kNN-reward knobs (used when reward_mode == "knn"). Defaults match
+    # distal/auroc.py so kNN-AUROC and kNN-reward use the same demo set.
+    knn_k: int = 10
+    knn_metric: str = "l2"  # "l2" or "cosine"
+    knn_chunk_size: int = 256
+    demo_dataset_repo_id: str = "lerobot/libero_10"
+    demo_max_frames: int | None = 50_000
+    demo_subsample_seed: int = 0
+    demo_rename_map: dict[str, str] = field(
+        default_factory=lambda: {
+            "observation.images.front": "observation.images.image",
+            "observation.images.wrist": "observation.images.image2",
+        }
+    )
+    demo_embs_cache_dir: str = str(Path(HF_ASSETS_CACHE) / "distal" / "demo_embs")
 
     # Input processing
     tokenizer_max_length: int = 200
@@ -967,7 +988,31 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
             device=device,
             batch_size=cfg.maha_embed_batch_size,
             num_workers=cfg.maha_embed_num_workers,
-            cache_upload=cfg.cache_maha_rewards,
+            use_cache=cfg.cache_step_rewards,
+        )
+    elif cfg.reward_mode == "knn":
+        from distal.knn_reward import load_or_compute_knn_rewards
+
+        logging.info(
+            f"Loading or computing kNN-distance rewards using {cfg.base_policy} "
+            f"(demos: {cfg.demo_dataset_repo_id}, k={cfg.knn_k}, "
+            f"metric={cfg.knn_metric}, dataset cache: {dataset.repo_id})..."
+        )
+        step_rewards = load_or_compute_knn_rewards(
+            dataset=dataset,
+            policy_path=cfg.base_policy,
+            device=device,
+            batch_size=cfg.maha_embed_batch_size,
+            num_workers=cfg.maha_embed_num_workers,
+            knn_k=cfg.knn_k,
+            knn_metric=cfg.knn_metric,
+            knn_chunk_size=cfg.knn_chunk_size,
+            demo_dataset_repo_id=cfg.demo_dataset_repo_id,
+            demo_max_frames=cfg.demo_max_frames,
+            demo_subsample_seed=cfg.demo_subsample_seed,
+            demo_rename_map=cfg.demo_rename_map,
+            demo_embs_cache_dir=cfg.demo_embs_cache_dir,
+            use_cache=cfg.cache_step_rewards,
         )
 
     frame_targets = _build_frame_targets(

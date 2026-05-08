@@ -35,7 +35,7 @@ distal/                             # Core pipeline
 ├── collect_libero_plus.py          # Same, for LIBERO-plus suite
 ├── compute_maha_stats.py           # Mahalanobis mean / inv-cov fitting
 ├── maha_reward.py                  # Mahalanobis → per-step reward
-├── maha_auroc.py                   # Mahalanobis as failure predictor (AUROC)
+├── auroc.py                        # Mahalanobis / kNN as failure predictor (AUROC)
 ├── train_value.py                  # Distributional value function training
 ├── train_pi_star.py                # PiStar06 fine-tune (in-script advantage precompute)
 ├── advantage_cache.py              # Content-addressed advantage cache (HF Hub mirrored)

@@ -140,7 +140,7 @@ def main() -> None:
             device=device,
             batch_size=cfg.maha_embed_batch_size,
             num_workers=cfg.maha_embed_num_workers,
-            cache_upload=False,
+            use_cache=False,
         )
 
     frame_targets = _build_frame_targets(

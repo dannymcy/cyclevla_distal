@@ -923,6 +923,7 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
         format="%(asctime)s - %(levelname)s - %(message)s",
         force=True,
     )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     _set_seed(cfg.seed)
 
     output_dir = Path("outputs/value") / datetime.now().strftime("%Y-%m-%d/%H-%M-%S")

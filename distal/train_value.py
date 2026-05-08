@@ -81,7 +81,8 @@ class ValidationFramePrediction:
 class RECAPValueTrainingConfig:
     """Configuration for RECAP value-network train/val."""
 
-    repo_id: str = "reece-omahoney/pi05-libero-plus"
+    job_name: str = "value-maha-libero-plus-gemma3"
+    repo_id: str = "reece-omahoney/pi05-libero-10"
     train_steps: int = 20_000
     batch_size: int = 64
     num_workers: int = 8
@@ -149,13 +150,16 @@ class RECAPValueTrainingConfig:
     compile_model: bool = True
 
     # Hub push for trained value network
-    value_repo_id: str | None = "reece-omahoney/value-maha-libero-plus-gemma3"
+    hub_user: str = "reece-omahoney"
     push_to_hub: bool = True
 
     # Weights & Biases (optional; set wandb_project to enable)
     wandb_project: str | None = "distal-value"
     wandb_entity: str | None = None
-    wandb_run_name: str | None = "value-maha-libero-plus-gemma3"
+
+    @property
+    def value_repo_id(self) -> str:
+        return f"{self.hub_user}/{self.job_name}"
 
 
 def _set_seed(seed: int) -> None:
@@ -769,7 +773,7 @@ def _init_wandb(cfg: RECAPValueTrainingConfig) -> Any:
     run = wandb.init(
         project=cfg.wandb_project,
         entity=cfg.wandb_entity,
-        name=cfg.wandb_run_name,
+        name=cfg.job_name,
         config=asdict(cfg),
     )
     logging.info(f"W&B run: {run.url}")

@@ -94,8 +94,6 @@ class RECAPValueTrainingConfig:
     log_every_n_steps: int = 100
     plot_every_n_train_steps: int = 200
     max_val_steps: int | None = 20
-    val_plot_num_episodes: int = 4
-    val_plot_num_frames: int = 8
 
     # Early stopping is counted in validation events, which now coincide with
     # log steps. With log_every_n_steps=100 and patience=20, that is ~2000
@@ -557,6 +555,9 @@ class RECAPFrameSupervisionDataset(Dataset):
 
 
 _TRAINING_METADATA_KEYS = ("target_bin", "target_value", "success", "frame_index")
+
+VAL_PLOT_NUM_EPISODES = 4
+VAL_PLOT_NUM_FRAMES = 8
 
 
 def _preprocess_batch(batch: dict, preprocessor) -> dict:
@@ -1031,7 +1032,7 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
 
     plot_episode_ids = _select_validation_plot_episode_ids(
         frame_targets=val_targets,
-        max_episodes=cfg.val_plot_num_episodes,
+        max_episodes=VAL_PLOT_NUM_EPISODES,
     )
     if plot_episode_ids:
         logging.info(f"Validation plots will track episodes: {plot_episode_ids}")
@@ -1070,11 +1071,6 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
     if cfg.max_val_steps is not None and cfg.max_val_steps <= 0:
         raise ValueError(
             f"max_val_steps must be > 0 when provided, got {cfg.max_val_steps}"
-        )
-    if cfg.plot_every_n_train_steps > 0 and cfg.val_plot_num_episodes <= 0:
-        logging.warning(
-            "plot_every_n_train_steps is set but val_plot_num_episodes <= 0, "
-            "so plotting is disabled."
         )
 
     # Need this to prevent hanging
@@ -1222,7 +1218,7 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
                         episode_index=episode_index,
                         predictions=collected_predictions.get(episode_index, []),
                         output_path=plot_path,
-                        num_preview_frames=cfg.val_plot_num_frames,
+                        num_preview_frames=VAL_PLOT_NUM_FRAMES,
                         num_value_bins=cfg.model.num_value_bins,
                         image_size=cfg.model.image_size,
                     )

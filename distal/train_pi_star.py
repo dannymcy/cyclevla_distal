@@ -34,6 +34,9 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from accelerate import Accelerator
+from accelerate.utils import DistributedDataParallelKwargs, broadcast_object_list
+from lerobot.common.train_utils import save_training_state
 from lerobot.configs import parser
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.configs.types import FeatureType
@@ -43,14 +46,12 @@ from lerobot.datasets.sampler import EpisodeAwareSampler
 from lerobot.envs.configs import LiberoEnv
 from lerobot.envs.factory import make_env_pre_post_processors
 from lerobot.utils.constants import ACTION, OBS_LANGUAGE_TOKENS
-from lerobot.utils.device_utils import get_safe_torch_device
 from lerobot.utils.feature_utils import dataset_to_policy_features
 from lerobot.utils.io_utils import write_json
 from lerobot.utils.random_utils import set_seed
 from lerobot.utils.utils import cycle
 from lerobot_policy_pistar06.configuration_pistar06 import PiStar06Config
 from lerobot_policy_pistar06.modeling_pistar06 import PiStar06Policy
-from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader
 
 from distal import advantage_cache
@@ -617,6 +618,35 @@ def _log_val_metrics(tag: str, metrics: dict[str, float]) -> None:
     )
 
 
+# ── Checkpoint save ──────────────────────────────────────────────────────────
+
+
+def save_pistar_checkpoint(
+    checkpoint_dir: Path,
+    step: int,
+    cfg: RECAPPiStarTrainingConfig,
+    policy: PiStar06Policy,
+    optimizer,
+    scheduler,
+    preprocessor=None,
+    postprocessor=None,
+    metrics: dict | None = None,
+) -> None:
+    """Write a resumable checkpoint in lerobot's pretrained/training_state layout."""
+
+    pretrained_dir = checkpoint_dir / "pretrained_model"
+    pretrained_dir.mkdir(parents=True, exist_ok=True)
+    policy.save_pretrained(pretrained_dir)
+    write_json(asdict(cfg), pretrained_dir / "train_config.json")
+    if metrics is not None:
+        write_json(metrics, pretrained_dir / "metrics.json")
+    if preprocessor is not None:
+        preprocessor.save_pretrained(pretrained_dir)
+    if postprocessor is not None:
+        postprocessor.save_pretrained(pretrained_dir)
+    save_training_state(checkpoint_dir, step, optimizer, scheduler)
+
+
 # ── Main training loop ───────────────────────────────────────────────────────
 
 
@@ -631,19 +661,43 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     set_seed(cfg.seed)
 
-    output_dir = Path("outputs/pistar") / datetime.now().strftime("%Y-%m-%d/%H-%M-%S")
+    ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
+    accelerator = Accelerator(
+        step_scheduler_with_optimizer=False,
+        kwargs_handlers=[ddp_kwargs],
+        mixed_precision="bf16",
+    )
+    is_main = accelerator.is_main_process
+    device = accelerator.device
+
+    # Compute output_dir on main, then broadcast so all ranks share the same path.
+    # Only main writes to it; typing it as a real Path everywhere avoids
+    # `Path | None` operator issues in main-only branches.
+    if is_main:
+        output_dir = Path("outputs/pistar") / datetime.now().strftime(
+            "%Y-%m-%d/%H-%M-%S"
+        )
+    else:
+        output_dir = Path()
+    output_dir_buf: list[Path] = [output_dir]
+    broadcast_object_list(output_dir_buf, from_process=0)
+    output_dir = output_dir_buf[0]
     checkpoints_dir = output_dir / "checkpoints"
-    checkpoints_dir.mkdir(parents=True, exist_ok=True)
-    with open(output_dir / "train_config.json", "w") as f:
-        json.dump(asdict(cfg), f, indent=4, default=str)
 
-    device = get_safe_torch_device(cfg.device, log=True)
-    logging.info(f"Using device: {device}")
+    if is_main:
+        checkpoints_dir.mkdir(parents=True, exist_ok=True)
+        with open(output_dir / "train_config.json", "w") as f:
+            json.dump(asdict(cfg), f, indent=4, default=str)
+        logging.info(f"Using device: {device} (world_size={accelerator.num_processes})")
 
-    wandb_run = _init_wandb(cfg)
+    wandb_run = _init_wandb(cfg) if is_main else None
 
     # ── 1. Load dataset and build episode-level train/val split ──────────
-    full_dataset = LeRobotDataset(repo_id=cfg.dataset_repo_id, vcodec="auto")
+    if is_main:
+        full_dataset = LeRobotDataset(repo_id=cfg.dataset_repo_id, vcodec="auto")
+    accelerator.wait_for_everyone()
+    if not is_main:
+        full_dataset = LeRobotDataset(repo_id=cfg.dataset_repo_id, vcodec="auto")
 
     success_by_episode = load_episode_success_from_dataset(full_dataset)
     logging.info(
@@ -699,19 +753,30 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
         from distal.rewards.maha import load_or_compute_maha_rewards
 
         embed_policy_path = vn_base_policy or str(cfg.policy.pretrained_path)
-        logging.info(
-            "Loading or computing Mahalanobis-distance rewards to match the "
-            f"value network's training signal (embed policy: {embed_policy_path}, "
-            f"stats: {vn_maha_stats_path})"
-        )
-        step_rewards = load_or_compute_maha_rewards(
-            dataset=full_dataset,
-            policy_path=embed_policy_path,
-            stats_path=vn_maha_stats_path,  # ty: ignore[invalid-argument-type]
-            device=device,
-            batch_size=int(vn_reward_cfg.get("embed_batch_size", 32)),
-            num_workers=int(vn_reward_cfg.get("embed_num_workers", 4)),
-        )
+        if is_main:
+            logging.info(
+                "Loading or computing Mahalanobis-distance rewards to match the "
+                f"value network's training signal (embed policy: {embed_policy_path}, "
+                f"stats: {vn_maha_stats_path})"
+            )
+            step_rewards = load_or_compute_maha_rewards(
+                dataset=full_dataset,
+                policy_path=embed_policy_path,
+                stats_path=vn_maha_stats_path,  # ty: ignore[invalid-argument-type]
+                device=device,
+                batch_size=int(vn_reward_cfg.get("embed_batch_size", 32)),
+                num_workers=int(vn_reward_cfg.get("embed_num_workers", 4)),
+            )
+        accelerator.wait_for_everyone()
+        if not is_main:
+            step_rewards = load_or_compute_maha_rewards(
+                dataset=full_dataset,
+                policy_path=embed_policy_path,
+                stats_path=vn_maha_stats_path,  # ty: ignore[invalid-argument-type]
+                device=device,
+                batch_size=int(vn_reward_cfg.get("embed_batch_size", 32)),
+                num_workers=int(vn_reward_cfg.get("embed_num_workers", 4)),
+            )
 
     frame_targets = build_frame_targets(
         dataset=full_dataset,
@@ -735,7 +800,8 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
 
     # ── 2. Build policy config and preprocessor ────────────────────────────
     policy_cfg = _resolve_policy_config(cfg, full_dataset, c_fail=c_fail)
-    _log_memory("post-dataset-split")
+    if is_main:
+        _log_memory("post-dataset-split")
 
     # ── 3. Pre-compute advantages using Pi0.5-based value network ────────
     if cfg.policy.enable_advantage_conditioning:
@@ -753,37 +819,45 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
         if cfg.advantage.cache and cache_file.is_file():
             advantage_lookup, _ = advantage_cache.load(cache_file)
         else:
-            vn_model = RECAPValueNetwork.from_pretrained(
-                cfg.advantage.value_network_pretrained_path
-            )
-            advantage_lookup, episode_lookup = _precompute_advantages(
-                full_dataset=full_dataset,
-                frame_targets=frame_targets,
-                value_network=vn_model,
-                policy_cfg=policy_cfg,
-                device=device,
-                batch_size=cfg.advantage.vn_batch_size,
-                num_workers=cfg.num_workers,
-            )
-            if cfg.advantage.cache:
-                advantage_cache.save(
-                    cache_file,
-                    advantage_lookup,
-                    episode_lookup=episode_lookup,
-                    metadata={
-                        "signature": signature,
-                        "value_network_pretrained_path": (
-                            cfg.advantage.value_network_pretrained_path
-                        ),
-                        "c_fail": c_fail,
-                        "num_value_bins": num_value_bins,
-                        "reward_mode": vn_reward_mode,
-                        "maha_stats_path": vn_maha_stats_path,
-                        "dataset_repo_id": cfg.dataset_repo_id,
-                        "success_by_episode": success_by_episode,
-                    },
+            if is_main:
+                vn_model = RECAPValueNetwork.from_pretrained(
+                    cfg.advantage.value_network_pretrained_path
                 )
-        _log_memory("post-advantage-precompute")
+                advantage_lookup, episode_lookup = _precompute_advantages(
+                    full_dataset=full_dataset,
+                    frame_targets=frame_targets,
+                    value_network=vn_model,
+                    policy_cfg=policy_cfg,
+                    device=device,
+                    batch_size=cfg.advantage.vn_batch_size,
+                    num_workers=cfg.num_workers,
+                )
+                if cfg.advantage.cache:
+                    advantage_cache.save(
+                        cache_file,
+                        advantage_lookup,
+                        episode_lookup=episode_lookup,
+                        metadata={
+                            "signature": signature,
+                            "value_network_pretrained_path": (
+                                cfg.advantage.value_network_pretrained_path
+                            ),
+                            "c_fail": c_fail,
+                            "num_value_bins": num_value_bins,
+                            "reward_mode": vn_reward_mode,
+                            "maha_stats_path": vn_maha_stats_path,
+                            "dataset_repo_id": cfg.dataset_repo_id,
+                            "success_by_episode": success_by_episode,
+                        },
+                    )
+            else:
+                advantage_lookup = None
+            buf = [advantage_lookup]
+            broadcast_object_list(buf, from_process=0)
+            advantage_lookup = buf[0]
+            assert advantage_lookup is not None, "broadcast advantage_lookup is None"
+        if is_main:
+            _log_memory("post-advantage-precompute")
 
         # ── 3b. Auto-compute advantage threshold from percentile ─────────
         if cfg.advantage.threshold_percentile is not None:
@@ -833,7 +907,8 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
     finally:
         torch.set_default_dtype(original_dtype)
     policy.recap_log_every = cfg.log_every_n_steps
-    _log_memory("post-policy-init")
+    if is_main:
+        _log_memory("post-policy-init")
 
     if cfg.policy.pretrained_path is not None:
         pretrained_path = str(cfg.policy.pretrained_path)
@@ -870,10 +945,12 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
             logging.warning(
                 f"Unexpected keys when loading pretrained: {len(unexpected)}"
             )
-    _log_memory("post-pretrained-load")
+    if is_main:
+        _log_memory("post-pretrained-load")
 
     policy.to(device)
-    _log_memory("post-policy-to-device")
+    if is_main:
+        _log_memory("post-policy-to-device")
 
     num_trainable = sum(p.numel() for p in policy.parameters() if p.requires_grad)
     num_total = sum(p.numel() for p in policy.parameters())
@@ -946,15 +1023,22 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
     max_grad_norm = optimizer_preset.grad_clip_norm
     optimizer = optimizer_preset.build(trainable_params)
     scheduler = scheduler_preset.build(optimizer, num_training_steps=cfg.train_steps)
-    logging.info(
-        "Using pi05 optimizer/scheduler presets: "
-        f"lr={optimizer_preset.lr} betas={optimizer_preset.betas} "
-        f"eps={optimizer_preset.eps} wd={optimizer_preset.weight_decay} "
-        f"grad_clip={max_grad_norm} "
-        f"warmup={scheduler_preset.num_warmup_steps} "
-        f"decay={scheduler_preset.num_decay_steps} "
-        f"decay_lr={scheduler_preset.decay_lr} "
-        f"train_steps={cfg.train_steps}"
+    if is_main:
+        logging.info(
+            "Using pi05 optimizer/scheduler presets: "
+            f"lr={optimizer_preset.lr} betas={optimizer_preset.betas} "
+            f"eps={optimizer_preset.eps} wd={optimizer_preset.weight_decay} "
+            f"grad_clip={max_grad_norm} "
+            f"warmup={scheduler_preset.num_warmup_steps} "
+            f"decay={scheduler_preset.num_decay_steps} "
+            f"decay_lr={scheduler_preset.decay_lr} "
+            f"train_steps={cfg.train_steps}"
+        )
+
+    # ── 7.5. Wrap policy/optimizer/loader/scheduler for distributed ──────
+    # val_loader is intentionally not prepared — validation runs on main rank only.
+    policy, optimizer, train_loader, scheduler = accelerator.prepare(
+        policy, optimizer, train_loader, scheduler
     )
 
     # ── 8. Training loop ─────────────────────────────────────────────────
@@ -976,11 +1060,12 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
         "val_alignment_on_failure": float("nan"),
     }
 
-    logging.info(
-        f"Starting training: {cfg.train_steps} steps, "
-        f"{len(train_dataset)} train frames, {len(val_dataset)} val frames"
-    )
-    _log_memory("pre-training-loop")
+    if is_main:
+        logging.info(
+            f"Starting training: {cfg.train_steps} steps, "
+            f"{len(train_dataset)} train frames, {len(val_dataset)} val frames"
+        )
+        _log_memory("pre-training-loop")
 
     train_iter = cycle(train_loader)
     policy.train()
@@ -1008,31 +1093,33 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
         batch = preprocessor(batch)
         batch = _inject_advantages(batch, advantage_lookup, device)
 
-        with torch.autocast(device_type=device.type, dtype=torch.bfloat16):
+        with accelerator.autocast():
             loss, output_dict = policy.forward(batch)
 
-        loss.backward()
+        accelerator.backward(loss)
         if max_grad_norm > 0:
-            clip_grad_norm_(trainable_params, max_grad_norm)
+            accelerator.clip_grad_norm_(policy.parameters(), max_grad_norm)
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
         scheduler.step()
 
-        if global_step == 1:
+        if global_step == 1 and is_main:
             _log_memory("first-train-step")
 
         step_loss = float(loss.item())
         wandb_step_metrics: dict[str, float] = {}
 
-        # ── Sim eval (independent cadence) ────────────────────────────
-        if (
+        # ── Sim eval (independent cadence, main rank only) ────────────────
+        is_sim_eval_step = (
             cfg.sim_eval_every_n_train_steps > 0
             and global_step % cfg.sim_eval_every_n_train_steps == 0
-        ):
+        )
+        if is_sim_eval_step and is_main:
+            unwrapped_policy = accelerator.unwrap_model(policy)
             if isinstance(cfg.eval_cfg, LiberoPlusEvalConfig):
                 step_eval_metrics = run_libero_plus_eval(
                     cfg.eval_cfg,
-                    policy=policy,
+                    policy=unwrapped_policy,
                     env_preprocessor=env_preprocessor,
                     env_postprocessor=env_postprocessor,
                     preprocessor=preprocessor,
@@ -1045,7 +1132,7 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
             else:
                 step_eval_metrics = run_libero_eval(
                     cfg.eval_cfg,
-                    policy=policy,
+                    policy=unwrapped_policy,
                     env_preprocessor=env_preprocessor,
                     env_postprocessor=env_postprocessor,
                     preprocessor=preprocessor,
@@ -1062,18 +1149,22 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
             pc_success = step_eval_metrics["pc_success"]
             if pc_success > best_pc_success:
                 best_pc_success = pc_success
-                best_checkpoint = {
-                    "global_train_step": global_step,
-                    "model_state_dict": policy.state_dict(),
-                    "optimizer_state_dict": optimizer.state_dict(),
-                    "policy_config": policy_cfg,
-                    "train_config": asdict(cfg),
-                    "metrics": step_eval_metrics,
-                }
-                torch.save(best_checkpoint, checkpoints_dir / "best.pt")
+                save_pistar_checkpoint(
+                    checkpoint_dir=checkpoints_dir / "best",
+                    step=global_step,
+                    cfg=cfg,
+                    policy=unwrapped_policy,
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    preprocessor=preprocessor,
+                    postprocessor=postprocessor,
+                    metrics=step_eval_metrics,
+                )
                 logging.info(f"New best pc_success: {best_pc_success:.4f}")
 
             policy.train()
+        if is_sim_eval_step:
+            accelerator.wait_for_everyone()
 
         is_log_step = (
             global_step == 1
@@ -1115,10 +1206,10 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
             global_step % cfg.sim_eval_every_n_train_steps == 0
             or global_step == cfg.train_steps
         )
-        if is_val_step:
+        if is_val_step and is_main:
             try:
                 val_metrics = _run_validation(
-                    policy,
+                    accelerator.unwrap_model(policy),
                     val_loader,
                     preprocessor,
                     advantage_lookup,
@@ -1143,26 +1234,31 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
             policy.train()
         else:
             val_metrics = dict(nan_val_metrics)
+        if is_val_step:
+            accelerator.wait_for_everyone()
 
-        # ── History + checkpoint ─────────────────────────────────────
+        # ── History + checkpoint (main rank only) ────────────────────
         saved_metrics = {
             "global_step": global_step,
             "train_loss": step_loss,
             "lr": lr,
             **val_metrics,
         }
-        history.append(saved_metrics)
-        write_json(history, output_dir / "metrics_history.json")  # ty: ignore[invalid-argument-type]
+        if is_main:
+            history.append(saved_metrics)
+            write_json(history, output_dir / "metrics_history.json")  # ty: ignore[invalid-argument-type]
 
-        checkpoint = {
-            "global_train_step": global_step,
-            "model_state_dict": policy.state_dict(),
-            "optimizer_state_dict": optimizer.state_dict(),
-            "policy_config": policy_cfg,
-            "train_config": asdict(cfg),
-            "metrics": saved_metrics,
-        }
-        torch.save(checkpoint, checkpoints_dir / "last.pt")
+            save_pistar_checkpoint(
+                checkpoint_dir=checkpoints_dir / "last",
+                step=global_step,
+                cfg=cfg,
+                policy=accelerator.unwrap_model(policy),
+                optimizer=optimizer,
+                scheduler=scheduler,
+                preprocessor=preprocessor,
+                postprocessor=postprocessor,
+                metrics=saved_metrics,
+            )
 
         if wandb_run is not None and wandb_step_metrics:
             wandb_run.log(wandb_step_metrics, step=global_step)
@@ -1176,23 +1272,36 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
         logging.warning(
             f"Skipped {skipped_batches} training batches due to video decode errors"
         )
-    logging.info(f"Training complete. Best pc_success: {best_pc_success:.4f}")
+    accelerator.wait_for_everyone()
 
-    # ── 9. Export in HuggingFace pretrained format for inference ──────────
-    pretrained_dir = output_dir / "pretrained"
-    pretrained_dir.mkdir(parents=True, exist_ok=True)
-    policy.save_pretrained(pretrained_dir)
-    logging.info(f"Saved pretrained model to {pretrained_dir}")
+    if is_main:
+        logging.info(f"Training complete. Best pc_success: {best_pc_success:.4f}")
+        logging.info(
+            f"Final checkpoint at {checkpoints_dir / 'last' / 'pretrained_model'}"
+        )
 
-    if cfg.push_to_hub:
-        repo_id = f"reece-omahoney/{cfg.job_name}"
-        logging.info(f"Pushing PiStar06 policy to hub: {repo_id}")
-        policy.push_to_hub(repo_id)
-        preprocessor.push_to_hub(repo_id)
-        postprocessor.push_to_hub(repo_id)
+        if cfg.push_to_hub:
+            from huggingface_hub import HfApi
 
-    if wandb_run is not None:
-        wandb_run.finish()
+            repo_id = f"reece-omahoney/{cfg.job_name}"
+            logging.info(f"Pushing PiStar06 policy to hub: {repo_id}")
+            unwrapped_policy = accelerator.unwrap_model(policy)
+            unwrapped_policy.push_to_hub(repo_id)
+            preprocessor.push_to_hub(repo_id)
+            postprocessor.push_to_hub(repo_id)
+            HfApi().upload_file(
+                path_or_fileobj=str(
+                    checkpoints_dir / "last" / "pretrained_model" / "train_config.json"
+                ),
+                path_in_repo="train_config.json",
+                repo_id=repo_id,
+                repo_type="model",
+            )
+
+        if wandb_run is not None:
+            wandb_run.finish()
+
+    accelerator.end_training()
 
 
 if __name__ == "__main__":

@@ -67,10 +67,10 @@ configs/                            # YAML configs for all workflows
 
 ## Setup
 
-Requires Python 3.12 and [uv](https://docs.astral.sh/uv/):
+Requires Python 3.12 and [pixi](https://pixi.sh/):
 
 ```bash
-uv sync
+pixi install
 ```
 
 ## Usage
@@ -85,10 +85,10 @@ pixi run train              # Train base policy
 pixi run eval               # Evaluate in LIBERO simulation
 
 # RL pipeline
-uv run python -m distal.collect
-uv run python -m distal.rewards.maha_stats
-uv run python -m distal.train_value
-uv run python -m distal.train_pi_star
+pixi run python distal/collect.py
+pixi run python distal/rewards/maha_stats.py
+pixi run python distal/train_value.py
+pixi run python distal/train_pi_star.py
 
 # Hardware
 pixi run record             # Record demonstrations via teleop
@@ -97,7 +97,7 @@ pixi run rollout            # Play trained policy on physical arm
 # Cluster / cloud
 pixi run sky [cluster_id]   # Launch (or sky exec on) SkyPilot cluster
 pixi run container          # Build Singularity container and upload to HPC
-uv run slurm run            # Submit SLURM job
+pixi run slurm run          # Submit SLURM job
 ```
 
 ## Hardware

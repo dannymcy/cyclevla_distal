@@ -10,10 +10,12 @@ conditioning and Mahalanobis-distance-based rewards, built on a fork of
 HuggingFace LeRobot. Primary evaluation target is LIBERO simulation; also
 supports a physical Piper arm.
 
-**Python 3.12** (`>=3.12,<3.13`). **uv** for Python packages (frozen `uv.lock`).
-**pixi** for conda-forge system binaries (ffmpeg, imagemagick) and as the task
-runner — see `[tasks]` in `pixi.toml`. Pixi tasks shell out via `uv run` so the
-uv-managed `.venv` is the source of truth for Python.
+**Python 3.12** (`>=3.12,<3.13`). **pixi** manages everything: conda-forge
+system binaries (ffmpeg, imagemagick, python), PyPI deps (incl. git/path/index
+overrides), environments (`default`, `hardware`), and tasks — see `pixi.toml`.
+The pixi-managed env lives at `.pixi/envs/default`. `pyproject.toml` is a stub
+for hatchling (build backend for the editable `distal` install) plus ruff
+config.
 
 ## Common Commands
 
@@ -22,14 +24,14 @@ uv-managed `.venv` is the source of truth for Python.
 pixi run train                           # lerobot-train using configs/train.yaml
 pixi run eval                            # lerobot-eval in LIBERO sim (pi05-libero default)
 
-# RECAP pipeline (run directly via uv, not lerobot-train)
-uv run python -m distal.collect          # rollouts → LeRobot dataset
-uv run python -m distal.collect_libero_plus
-uv run python -m distal.rewards.maha_stats      # mean / cov_inv from base-dataset embeddings
-uv run python -m distal.train_value             # distributional value network
-uv run python -m distal.train_pi_star           # advantage-conditioned Pi0.5 fine-tune
-uv run python -m distal.auroc                   # Mahalanobis / kNN AUROC vs episode success
-uv run python -m distal.eval_guidance           # sweep guidance scales
+# RECAP pipeline (run directly via pixi, not lerobot-train)
+pixi run python distal/collect.py               # rollouts → LeRobot dataset
+pixi run python distal/collect_libero_plus.py
+pixi run python distal/rewards/maha_stats.py    # mean / cov_inv from base-dataset embeddings
+pixi run python distal/train_value.py           # distributional value network
+pixi run python distal/train_pi_star.py         # advantage-conditioned Pi0.5 fine-tune
+pixi run python distal/auroc.py                 # Mahalanobis / kNN AUROC vs episode success
+pixi run python distal/eval_guidance.py         # sweep guidance scales
 
 # Hardware (Piper)
 pixi run record                          # teleop demos
@@ -39,11 +41,11 @@ pixi run rollout                         # play trained policy on the arm
 pixi run sky [cluster_id]                # launch on Vast via SkyPilot, or sky exec on existing
 pixi run sky-ssh [cluster_id]            # same but via SSH cloud
 pixi run container                       # build container.sif and scp to HTC
-uv run slurm run                         # SLURM submit (slurm-tools git dep)
-uv run slurm gui [stop]                  # Flask job-monitor daemon
+pixi run slurm run                       # SLURM submit (slurm-tools git dep)
+pixi run slurm gui [stop]                # Flask job-monitor daemon
 
 # Quality
-uv run pre-commit run --all-files        # ruff (E,F,I + format), check-toml/yaml, mdformat --wrap 80, ty
+pixi run pre-commit run --all-files      # ruff (E,F,I + format), check-toml/yaml, mdformat --wrap 80, ty
 ```
 
 No formal test suite — verification is via `pixi run eval` and the `auroc`
@@ -58,20 +60,20 @@ diagnostic.
   OSMesa is too slow for policy evaluation.
 - `slurm-tools` is a separate git repo (pulled as a git dependency); push
   changes to it from its own checkout.
-- **Cluster jobs go through `uv run slurm run`.** Override configs on the CLI
+- **Cluster jobs go through `pixi run slurm run`.** Override configs on the CLI
   rather than editing `configs/slurm.yaml`. Check job status at
   `localhost:5000/jobs` and view logs at `localhost:5000/logs/<job_id>` (both
-  served by `uv run slurm gui`).
+  served by `pixi run slurm gui`).
 - **SkyPilot API server caches code.** After patching SkyPilot source under
-  `.venv/`, run `uv run sky api stop` before retrying — the daemon keeps stale
-  modules loaded.
+  `.pixi/envs/default/`, run `pixi run sky api stop` before retrying — the
+  daemon keeps stale modules loaded.
 - **PRs to external repos** (LeRobot fork etc.): check
   `.github/pull_request_template.md` and `CONTRIBUTING.md` first and follow
   their format.
 - **Isambard AI Phase 2 (`u6jz.aip2.isambard`) home is 100 GiB; large dirs are
   symlinked to `$SCRATCHDIR=/scratch/u6jz/reece.u6jz` (5 TiB).** Active links:
-  `~/distal/{.venv,outputs,wandb}` and `~/.cache/{huggingface,uv,triton}`.
-  `.venv` lives on scratch so `uv` can hardlink (rather than copy) into it.
+  `~/distal/{.pixi,outputs,wandb}` and `~/.cache/{huggingface,rattler,triton}`.
+  `.pixi` lives on scratch so pixi can hardlink (rather than copy) into it.
   Write new bulky outputs to scratch (or under an existing symlinked path) —
   never to a fresh dir under `~`.
 
@@ -165,8 +167,8 @@ YAML configs drive workflows via draccus / LeRobot config parsers:
 - **Singularity** (`container.def` → `container.sif`) for the HTC cluster
   (L40S/H100). Built and uploaded via `pixi run container`.
 - **SkyPilot** (`configs/sky*.yaml`) targets Vast / RunPod / etc. The setup
-  block bootstraps `uv`, runs `uv sync`, and downloads LIBERO assets from the
-  `Sylvest/LIBERO-plus` HF dataset.
+  block bootstraps `pixi`, runs `pixi install`, and downloads LIBERO assets from
+  the `Sylvest/LIBERO-plus` HF dataset.
 
 ### LeRobot fork
 

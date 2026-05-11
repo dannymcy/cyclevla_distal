@@ -14,13 +14,13 @@ sudo apt-get update && sudo apt-get install -y \
   libopengl0 \
   unzip
 
-curl -LsSf https://astral.sh/uv/install.sh | sh
-export PATH="$HOME/.local/bin:$PATH"
+curl -fsSL https://pixi.sh/install.sh | bash
+export PATH="$HOME/.pixi/bin:$PATH"
 cd ~/sky_workdir
 
-uv sync
+pixi install
 
 bash ~/sky_workdir/scripts/setup_libero.sh
 
 cd ~/sky_workdir
-uv run python ~/sky_workdir/.venv/lib/python3.12/site-packages/robosuite/scripts/setup_macros.py
+pixi run python ~/sky_workdir/.pixi/envs/default/lib/python3.12/site-packages/robosuite/scripts/setup_macros.py

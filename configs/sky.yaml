@@ -24,4 +24,4 @@ setup: |
 
 run: |
   cd ~/sky_workdir
-  uv run distal/train_pi_star.py
+  pixi run python distal/train_pi_star.py

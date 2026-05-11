@@ -21,4 +21,4 @@ setup: |
 
 run: |
   cd ~/sky_workdir
-  uv run python -m distal.eval_guidance
+  pixi run python distal/eval_guidance

@@ -2,8 +2,8 @@
 # One-shot libero / libero_plus bootstrap for a new machine.
 #
 # - Locates the installed `libero` (hf-libero) and `libero_plus` packages
-#   under $VENV_DIR (default: $PWD/.venv) — `find -L` because the venv may
-#   be a symlink (e.g. Isambard scratch).
+#   under $VENV_DIR (default: $PWD/.pixi/envs/default) — `find -L` because
+#   the env may be a symlink (e.g. Isambard scratch).
 # - Writes ~/.libero/config.yaml and ~/.libero_plus/config.yaml so each
 #   package's `__init__.py` skips its interactive `input()` prompt on
 #   first import.
@@ -14,14 +14,14 @@
 # Idempotent: safe to re-run.
 set -euo pipefail
 
-VENV_DIR="${VENV_DIR:-$PWD/.venv}"
+VENV_DIR="${VENV_DIR:-$PWD/.pixi/envs/default}"
 ASSETS_URL="${ASSETS_URL:-https://huggingface.co/datasets/Sylvest/LIBERO-plus/resolve/main/assets.zip}"
 
 LIBERO_DIR=$(find -L "$VENV_DIR" -type d -path "*/libero/libero" -not -path "*libero_plus*" -print -quit)
 LIBERO_PLUS_DIR=$(find -L "$VENV_DIR" -type d -path "*/libero_plus/libero_plus" -print -quit)
 
 if [ -z "$LIBERO_PLUS_DIR" ]; then
-  echo "libero_plus install not found under $VENV_DIR — run 'uv sync' first" >&2
+  echo "libero_plus install not found under $VENV_DIR — run 'pixi install' first" >&2
   exit 1
 fi
 

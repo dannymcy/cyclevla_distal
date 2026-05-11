@@ -31,7 +31,7 @@ fi
 if [[ -z "${SWEEP_ID:-}" ]]; then
   echo "Creating sweep from $SWEEP_CONFIG ..."
   # `wandb sweep` prints "Creating sweep with ID: xxxx" to stderr.
-  SWEEP_OUT=$(uv run wandb sweep --entity "$ENTITY" --project "$PROJECT" "$SWEEP_CONFIG" 2>&1)
+  SWEEP_OUT=$(pixi run wandb sweep --entity "$ENTITY" --project "$PROJECT" "$SWEEP_CONFIG" 2>&1)
   echo "$SWEEP_OUT"
   SWEEP_ID=$(echo "$SWEEP_OUT" | grep -oE 'sweep with ID: [a-z0-9]+' | awk '{print $NF}')
   if [[ -z "$SWEEP_ID" ]]; then
@@ -52,7 +52,7 @@ echo
 echo "Submitting $N_AGENTS SLURM agent(s) for $SWEEP_PATH ..."
 for i in $(seq 1 "$N_AGENTS"); do
   echo "  → agent $i/$N_AGENTS"
-  uv run slurm run --command "$AGENT_CMD" --time 10
+  pixi run slurm run --command "$AGENT_CMD" --time 10
 done
 
 echo

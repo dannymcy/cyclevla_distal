@@ -113,11 +113,6 @@ else
 fi
 """
 
-[tasks.sweep]
-description = "Create wandb sweep and submit N SLURM agents (default 5)"
-args = [{ "arg" = "n_agents", "default" = "5" }]
-cmd = "./scripts/launch_sweep.sh {{ n_agents }}"
-
-[tasks.collect]
+[tasks.collect-libero-plus]
 description = "Fan out LIBERO-plus collection across one sky cluster per suite, then merge"
-cmd = "./scripts/launch_collect.sh"
+cmd = "./scripts/collect_libero_plus.sh"

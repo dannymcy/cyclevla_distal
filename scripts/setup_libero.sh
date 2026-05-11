@@ -45,13 +45,50 @@ init_states: $LIBERO_DIR/init_files
 EOF
 fi
 
-if [ ! -d "$LIBERO_PLUS_DIR/assets" ]; then
-  TMP_EXTRACT=$(mktemp -d -p "$LIBERO_PLUS_DIR")
-  curl -L -o "$TMP_EXTRACT/libero_assets.zip" "$ASSETS_URL"
-  unzip -q "$TMP_EXTRACT/libero_assets.zip" -d "$TMP_EXTRACT"
-  mv "$(find "$TMP_EXTRACT" -type d -name assets -print -quit)" "$LIBERO_PLUS_DIR/assets"
+LOCAL_BASE="${LOCAL_BASE:-/local/user/$UID}"
+LOCAL_ASSETS="$LOCAL_BASE/libero_assets"
+ASSETS_CACHE="${ASSETS_CACHE:-${SCRATCHDIR:-$HOME}/libero_assets.zip}"
+
+if [ ! -d "$LOCAL_ASSETS" ]; then
+  if [ ! -f "$ASSETS_CACHE" ]; then
+    mkdir -p "$(dirname "$ASSETS_CACHE")"
+    curl -L -o "$ASSETS_CACHE" "$ASSETS_URL"
+  fi
+  mkdir -p "$LOCAL_BASE"
+  TMP_EXTRACT=$(mktemp -d -p "$LOCAL_BASE")
+  TOTAL_BYTES=$(unzip -l "$ASSETS_CACHE" | tail -1 | awk '{print $1}')
+  unzip -q "$ASSETS_CACHE" -d "$TMP_EXTRACT" &
+  UNZIP_PID=$!
+  START=$SECONDS
+  PREV_BYTES=0
+  PREV_TIME=0
+  while kill -0 "$UNZIP_PID" 2>/dev/null; do
+    sleep 10
+    BYTES=$(du -sb "$TMP_EXTRACT" 2>/dev/null | awk '{print $1}')
+    ELAPSED=$((SECONDS - START))
+    DELTA_B=$((BYTES - PREV_BYTES))
+    DELTA_T=$((ELAPSED - PREV_TIME))
+    if [ "$DELTA_T" -gt 0 ] && [ "$DELTA_B" -gt 0 ] && [ "$TOTAL_BYTES" -gt 0 ]; then
+      RATE=$((DELTA_B / DELTA_T))
+      REMAIN=$((TOTAL_BYTES - BYTES))
+      if [ "$REMAIN" -gt 0 ] && [ "$RATE" -gt 0 ]; then
+        ETA_S=$((REMAIN / RATE))
+        PCT=$((BYTES * 100 / TOTAL_BYTES))
+        printf 'Unzipping libero plus assets: %s/%s (%d%%, ETA %s)\n' \
+          "$(numfmt --to=iec "$BYTES")" \
+          "$(numfmt --to=iec "$TOTAL_BYTES")" \
+          "$PCT" "$(date -ud "@$ETA_S" +%H:%M:%S)"
+      fi
+    fi
+    PREV_BYTES=$BYTES
+    PREV_TIME=$ELAPSED
+  done
+  wait "$UNZIP_PID"
+  mv "$(find "$TMP_EXTRACT" -type d -name assets -print -quit)" "$LOCAL_ASSETS"
   rm -rf "$TMP_EXTRACT"
 fi
+
+ln -sfn "$LOCAL_ASSETS" "$LIBERO_PLUS_DIR/assets"
 
 echo "libero_plus ready at $LIBERO_PLUS_DIR"
 [ -n "$LIBERO_DIR" ] && echo "libero ready at $LIBERO_DIR"

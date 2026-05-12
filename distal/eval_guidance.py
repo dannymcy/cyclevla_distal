@@ -1,6 +1,7 @@
 """Evaluate an advantage-conditioned policy across guidance scales.
 
-Runs lerobot-eval for each guidance scale and prints a summary table.
+Runs lerobot-eval (or distal.eval_libero_plus when ``libero_plus=True``) for
+each guidance scale and prints a summary table.
 """
 
 import json
@@ -17,6 +18,7 @@ class EvalGuidanceConfig:
     policy_path: str = "reece-omahoney/pistar06-libero-maha"
     n_action_steps: int = 10
     guidance_scales: list[float] = field(default_factory=lambda: [1.0, 1.5, 2.0, 2.5])
+    libero_plus: bool = False
 
 
 @draccus.wrap()
@@ -28,32 +30,47 @@ def main(cfg: EvalGuidanceConfig):
         print(f"  cfg_beta = {beta}")
         print(f"{'=' * 60}\n", flush=True)
 
-        cmd = [
-            sys.executable,
-            "-m",
-            "lerobot.scripts.lerobot_eval",
-            "--config_path=configs/eval.yaml",
-            f"--policy.path={cfg.policy_path}",
-            f"--policy.n_action_steps={cfg.n_action_steps}",
-            f"--policy.cfg_beta={beta}",
-        ]
+        if cfg.libero_plus:
+            cmd = [
+                sys.executable,
+                "-m",
+                "distal.eval_libero_plus",
+                f"--policy_path={cfg.policy_path}",
+                f"--n_action_steps={cfg.n_action_steps}",
+                f"--cfg_beta={beta}",
+            ]
+            eval_root = Path("outputs/eval_libero_plus")
+            summary_glob = "summary.json"
+        else:
+            cmd = [
+                sys.executable,
+                "-m",
+                "lerobot.scripts.lerobot_eval",
+                "--config_path=configs/eval.yaml",
+                f"--policy.path={cfg.policy_path}",
+                f"--policy.n_action_steps={cfg.n_action_steps}",
+                f"--policy.cfg_beta={beta}",
+                "--policy.device=cuda",
+            ]
+            eval_root = Path("outputs/eval")
+            summary_glob = "eval_info.json"
 
         result = subprocess.run(cmd, capture_output=False)
         if result.returncode != 0:
             print(f"WARNING: eval failed for beta={beta}")
             continue
 
-        # Find the most recent eval output
-        eval_root = Path("outputs/eval")
         if not eval_root.exists():
             continue
 
-        latest = max(eval_root.rglob("eval_info.json"), key=lambda p: p.stat().st_mtime)
+        latest = max(eval_root.rglob(summary_glob), key=lambda p: p.stat().st_mtime)
         with open(latest) as f:
             info = json.load(f)
 
-        overall = info.get("overall", {})
-        pc_success = overall.get("pc_success", 0.0)
+        if cfg.libero_plus:
+            pc_success = info.get("pc_success", 0.0)
+        else:
+            pc_success = info.get("overall", {}).get("pc_success", 0.0)
         results[beta] = pc_success
 
         print(f"\nguidance_scale={beta}: success={pc_success:.1f}%")

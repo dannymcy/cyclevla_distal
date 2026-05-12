@@ -86,6 +86,23 @@ def build_task_id_to_base_task(suites: list[str]) -> dict[int, str]:
     }
 
 
+def slugify_category(category: str) -> str:
+    return category.lower().replace(" ", "_")
+
+
+def build_task_id_to_category(suites: list[str]) -> dict[int, str]:
+    classif = json.loads(
+        (
+            files("libero_plus.libero_plus") / "benchmark" / "task_classification.json"
+        ).read_text()
+    )
+    return {
+        entry["id"]: slugify_category(entry["category"])
+        for suite_name in suites
+        for entry in classif[suite_name]
+    }
+
+
 def resolve_eval_task_ids(
     suite_name: str,
     per_cell: int,
@@ -168,6 +185,7 @@ def run_libero_eval(
         wandb_step=wandb_step,
         fps=cfg.fps,
         task_id_to_base=None,
+        task_id_to_category=None,
     )
 
 
@@ -188,6 +206,7 @@ def run_libero_plus_eval(
     """Run LIBERO-plus eval and return per-suite + per-base-task + overall metrics."""
     parallel_envs = cfg.parallel_envs if cfg.parallel_envs > 0 else auto_parallel_envs()
     task_id_to_base = build_task_id_to_base_task(cfg.suites)
+    task_id_to_category = build_task_id_to_category(cfg.suites)
 
     plan: list[tuple[str, int, list[int], LiberoEnv, int]] = []
     for suite_name in cfg.suites:
@@ -226,6 +245,7 @@ def run_libero_plus_eval(
         wandb_step=wandb_step,
         fps=cfg.fps,
         task_id_to_base=task_id_to_base,
+        task_id_to_category=task_id_to_category,
     )
 
 
@@ -245,11 +265,13 @@ def _run_chunks(
     wandb_step: int | None,
     fps: int,
     task_id_to_base: dict[int, str] | None,
+    task_id_to_category: dict[int, str] | None,
 ) -> dict[str, float]:
     """Shared rollout loop over a pre-built plan.
 
-    If ``task_id_to_base`` is provided, per-base-task metrics are aggregated
-    (libero-plus mode); otherwise only per-suite + overall metrics are reported.
+    If ``task_id_to_base`` / ``task_id_to_category`` are provided, per-base-task
+    / per-perturbation-category metrics are aggregated (libero-plus mode);
+    otherwise only per-suite + overall metrics are reported.
     """
     policy.eval()
 
@@ -257,6 +279,9 @@ def _run_chunks(
         lambda: {"successes": [], "sum_rewards": []}
     )
     base_task_metrics: dict[str, dict[str, list[float]]] = defaultdict(
+        lambda: {"successes": [], "sum_rewards": []}
+    )
+    category_metrics: dict[str, dict[str, list[float]]] = defaultdict(
         lambda: {"successes": [], "sum_rewards": []}
     )
 
@@ -312,13 +337,17 @@ def _run_chunks(
                     sum_r = float(ep["sum_reward"])
                     suite_metrics[suite_name]["successes"].append(s)
                     suite_metrics[suite_name]["sum_rewards"].append(sum_r)
+                    # Episodes are produced in batch-major order over envs;
+                    # env e in any batch corresponds to chunk[e].
+                    tid = chunk[i % len(chunk)]
                     if task_id_to_base is not None:
-                        # Episodes are produced in batch-major order over envs;
-                        # env e in any batch corresponds to chunk[e].
-                        tid = chunk[i % len(chunk)]
                         base = task_id_to_base[tid]
                         base_task_metrics[base]["successes"].append(s)
                         base_task_metrics[base]["sum_rewards"].append(sum_r)
+                    if task_id_to_category is not None:
+                        cat = task_id_to_category[tid]
+                        category_metrics[cat]["successes"].append(s)
+                        category_metrics[cat]["sum_rewards"].append(sum_r)
                 chunk_videos = info.get("video_paths", [])
                 if first_video_path is None and chunk_videos:
                     first_video_path = chunk_videos[0]
@@ -389,6 +418,14 @@ def _run_chunks(
         metrics[f"pc_success_base_{base}"] = base_succ
         metrics[f"avg_sum_reward_base_{base}"] = base_rew
         metrics[f"n_base_{base}"] = float(len(m["successes"]))
+    for cat, m in category_metrics.items():
+        cat_succ = (
+            float(np.mean(m["successes"]) * 100) if m["successes"] else float("nan")
+        )
+        cat_rew = float(np.mean(m["sum_rewards"])) if m["sum_rewards"] else float("nan")
+        metrics[f"pc_success_cat_{cat}"] = cat_succ
+        metrics[f"avg_sum_reward_cat_{cat}"] = cat_rew
+        metrics[f"n_cat_{cat}"] = float(len(m["successes"]))
     logging.info(
         f"Overall: pc_success={pc_success:.1f}% avg_sum_reward={avg_sum_reward:.3f} "
         f"(n={len(overall_succ)}) eval_s={eval_s:.1f}"

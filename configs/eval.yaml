@@ -8,6 +8,6 @@ env:
   observation_width: 256
 
 eval:
-  n_episodes: 20
-  batch_size: 0
+  n_episodes: 50
+  batch_size: 25
 

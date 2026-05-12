@@ -33,18 +33,42 @@ from distal.sim_eval import LiberoPlusEvalConfig, run_libero_plus_eval
 
 @dataclass
 class EvalLiberoPlusConfig:
-    policy_path: str = "reece-omahoney/pistar06-libero-plus-maha"
+    policy_path: str = "reece-omahoney/pistar-knn-rel-libero-plus"
     n_action_steps: int = 10
     cfg_beta: float | None = None
     device: str = "cuda"
     seed: int = 42
 
     eval: LiberoPlusEvalConfig = field(
-        default_factory=lambda: LiberoPlusEvalConfig(base_task="turn_on_the_stove")
+        default_factory=lambda: LiberoPlusEvalConfig(
+            base_task="turn_on_the_stove", parallel_envs=25
+        )
     )
 
     output_dir: str | None = None
-    max_episodes_rendered: int = 4
+    max_episodes_rendered: int = 0
+
+
+def log_group_table(
+    metrics: dict[str, float], *, prefix: str, header: str, title: str
+) -> None:
+    names = sorted(
+        k[len(f"pc_success_{prefix}_") :]
+        for k in metrics
+        if k.startswith(f"pc_success_{prefix}_")
+    )
+    if not names:
+        return
+    name_w = max(len(header), max(len(n) for n in names))
+    logging.info(f"{title}:")
+    logging.info(
+        f"  {header:<{name_w}}  {'pc_success':>10}  {'avg_sum_reward':>14}  {'n':>4}"
+    )
+    for name in names:
+        pc = metrics[f"pc_success_{prefix}_{name}"]
+        rew = metrics[f"avg_sum_reward_{prefix}_{name}"]
+        n = int(metrics[f"n_{prefix}_{name}"])
+        logging.info(f"  {name:<{name_w}}  {pc:>9.1f}%  {rew:>14.3f}  {n:>4}")
 
 
 @draccus.wrap()
@@ -112,23 +136,15 @@ def main(cfg: EvalLiberoPlusConfig):
         json.dump(summary, f, indent=2)
     logging.info(f"Saved summary to {summary_path}")
 
-    base_names = sorted(
-        k[len("pc_success_base_") :]
-        for k in metrics
-        if k.startswith("pc_success_base_")
+    log_group_table(
+        metrics, prefix="base", header="base_task", title="Per-task results"
     )
-    if base_names:
-        name_w = max(len("base_task"), max(len(b) for b in base_names))
-        logging.info("Per-base-task results:")
-        logging.info(
-            f"  {'base_task':<{name_w}}  {'pc_success':>10}  "
-            f"{'avg_sum_reward':>14}  {'n':>4}"
-        )
-        for base in base_names:
-            pc = metrics[f"pc_success_base_{base}"]
-            rew = metrics[f"avg_sum_reward_base_{base}"]
-            n = int(metrics[f"n_base_{base}"])
-            logging.info(f"  {base:<{name_w}}  {pc:>9.1f}%  {rew:>14.3f}  {n:>4}")
+    log_group_table(
+        metrics,
+        prefix="cat",
+        header="perturbation_category",
+        title="Per-perturbation-category results",
+    )
 
 
 if __name__ == "__main__":

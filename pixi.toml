@@ -83,7 +83,7 @@ accelerate launch --multi_gpu --num_processes=2 \
 description = "Evaluate policy in LIBERO sim"
 cmd = """
 lerobot-eval --config_path configs/eval.yaml \
-  --policy.path=lerobot/pi05-libero \
+  --policy.path=reece-omahoney/pistar-knn-libero \
   --policy.n_action_steps=10
 """
 

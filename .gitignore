@@ -19,4 +19,4 @@ lerobot/
 !.pixi/config.toml
 
 # direnv
-.direnv/
+.envrc

@@ -90,20 +90,20 @@ hardware = { features = ["hardware"], solve-group = "default" }
 description = "Train base policy"
 cmd = """
 accelerate launch --multi_gpu --num_processes=2 -m \
-  lerobot.scripts.lerobot_train --config_path configs/train.yaml
+  lerobot.scripts.lerobot_train --config_path=configs/train.yaml
 """
 
 [tasks.eval]
 description = "Evaluate policy in LIBERO sim"
-cmd = "lerobot-eval --config_path configs/eval.yaml"
+cmd = "lerobot-eval --config_path=configs/eval.yaml"
 
 [feature.hardware.tasks.record]
 description = "Record demonstrations via teleop"
-cmd = "lerobot-record --config_path configs/record.yaml"
+cmd = "lerobot-record --config_path=configs/record.yaml"
 
 [feature.hardware.tasks.rollout]
 description = "Rollout trained policy on physical arm"
-cmd = "lerobot-rollout --config_path configs/rollout.yaml"
+cmd = "lerobot-rollout --config_path=configs/rollout.yaml"
 
 [tasks.sky]
 description = "Launch on Vast via SkyPilot, or sky exec on existing cluster_id"

@@ -39,6 +39,7 @@ future = ">=1.0.0"
 pre-commit = ">=4.5.1"
 ruff = ">=0.15.2"
 ty = ">=0.0.21"
+lerobot-doctor = ">=0.1.0, <0.2"
 
 [target.linux-64.pypi-dependencies]
 torch = { version = ">=2.7,<2.11", index = "https://download.pytorch.org/whl/cu126" }
@@ -56,6 +57,7 @@ lerobot = { git = "https://github.com/reeceomahoney/lerobot", branch = "distal",
 ] }
 lerobot_robot_piper = { path = "lerobot_robot_piper", editable = true }
 lerobot_teleoperator_piper = { path = "lerobot_teleoperator_piper", editable = true }
+pynput = ">=1.7"
 
 [environments]
 default = { solve-group = "default" }
@@ -89,11 +91,11 @@ lerobot-eval --config_path configs/eval.yaml \
 
 # Hardware
 
-[tasks.record]
+[feature.hardware.tasks.record]
 description = "Record demonstrations via teleop"
 cmd = "lerobot-record --config_path configs/record.yaml"
 
-[tasks.rollout]
+[feature.hardware.tasks.rollout]
 description = "Rollout trained policy on physical arm"
 cmd = """
 lerobot-rollout --config_path configs/rollout.yaml \

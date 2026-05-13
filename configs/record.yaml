@@ -5,14 +5,14 @@ teleop:
   type: piper_teleop
 
 dataset:
-  repo_id: reece-omahoney/remove-pen-lid
+  repo_id: reece-omahoney/remove-pen-lid-2
   single_task: Remove the pen lid
   fps: 20
   episode_time_s: 600
   reset_time_s: 15
   num_episodes: 50
   streaming_encoding: true
-  encoder_threads: 2
+  encoder_threads: 5
   vcodec: auto
   push_to_hub: true
 

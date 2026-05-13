@@ -17,3 +17,6 @@ lerobot/
 # pixi environments
 .pixi/*
 !.pixi/config.toml
+
+# direnv
+.direnv/

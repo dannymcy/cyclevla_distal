@@ -88,7 +88,8 @@ class RECAPPiStarTrainingConfig:
     device: str = "cuda"
     log_every_n_steps: int = 100
     max_val_steps: int | None = 50
-    sim_eval_every_n_train_steps: int = 500
+    sim_eval_every_n_train_steps: int = 1000
+    save_every_n_steps: int = 2000
 
     policy: PiStar06Config = field(
         default_factory=lambda: PiStar06Config(
@@ -853,6 +854,25 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
 
             policy.train()
         if is_sim_eval_step:
+            accelerator.wait_for_everyone()
+
+        # ── Periodic checkpoint save (independent cadence, main rank only) ─
+        is_save_step = (
+            cfg.save_every_n_steps > 0 and global_step % cfg.save_every_n_steps == 0
+        )
+        if is_save_step and is_main:
+            save_pistar_checkpoint(
+                checkpoint_dir=checkpoints_dir / f"step_{global_step:08d}",
+                step=global_step,
+                cfg=cfg,
+                policy=accelerator.unwrap_model(policy),
+                optimizer=optimizer,
+                scheduler=scheduler,
+                preprocessor=preprocessor,
+                postprocessor=postprocessor,
+            )
+            logging.info(f"Saved checkpoint at step {global_step}")
+        if is_save_step:
             accelerator.wait_for_everyone()
 
         is_log_step = (

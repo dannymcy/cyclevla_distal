@@ -7,7 +7,7 @@ env:
 
 eval:
   n_episodes: 50
-  batch_size: 16
+  batch_size: 25
 
 policy:
   path: reece-omahoney/pistar-knn-libero

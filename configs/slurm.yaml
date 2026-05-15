@@ -22,6 +22,6 @@ envs:
   - PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
 command: |-
   module load cuda/12.6
-  bash scripts/setup_libero.sh
+  # VENV_DIR="$PWD/.pixi/envs/cu126" bash scripts/setup_libero.sh
 
-  pixi run -e cu126 eval
+  pixi run -e cu126 python distal/train_pi_star.py

@@ -77,8 +77,8 @@ from distal.train_value import (
 class RECAPPiStarTrainingConfig:
     """Configuration for RECAP PiStar06 advantage-conditioned Pi0.5 policy training."""
 
-    job_name: str = "pistar-knn-rel-libero-plus"
-    dataset_repo_id: str = "reece-omahoney/pi05-libero-plus"
+    job_name: str = "pistar-knn-libero-task-adv-pi05-base"
+    dataset_repo_id: str = "reece-omahoney/pi05-libero-10"
 
     train_steps: int = 20_000
     batch_size: int = 64
@@ -88,31 +88,35 @@ class RECAPPiStarTrainingConfig:
     device: str = "cuda"
     log_every_n_steps: int = 100
     max_val_steps: int | None = 50
-    sim_eval_every_n_train_steps: int = 1000
+    sim_eval_every_n_train_steps: int = 500
     save_every_n_steps: int = 2000
 
     policy: PiStar06Config = field(
         default_factory=lambda: PiStar06Config(
-            pretrained_path=Path("lerobot/pi05-libero"),
+            pretrained_path=Path("lerobot/pi05_base"),
             dtype="bfloat16",
             n_action_steps=10,
             gradient_checkpointing=True,
             compile_model=True,
         )
     )
-    advantage: AdvantageConfig = field(default_factory=AdvantageConfig)
+    advantage: AdvantageConfig = field(
+        default_factory=lambda: AdvantageConfig(
+            value_network_pretrained_path="reece-omahoney/value-knn-libero"
+        )
+    )
 
     # Sim eval
     eval_cfg: LiberoEvalConfig | LiberoPlusEvalConfig = field(
-        # default_factory=lambda: LiberoEvalConfig(
-        #     suites=["libero_10"],
-        #     task_ids=[8],
-        #     n_envs_per_task=25,
-        #     n_episodes_per_task=2,
-        # )
-        default_factory=lambda: LiberoPlusEvalConfig(
-            base_task="turn_on_the_stove", parallel_envs=25
+        default_factory=lambda: LiberoEvalConfig(
+            suites=["libero_10"],
+            task_ids=[8],
+            n_envs_per_task=25,
+            n_episodes_per_task=2,
         )
+        # default_factory=lambda: LiberoPlusEvalConfig(
+        #     base_task="turn_on_the_stove", parallel_envs=25
+        # )
     )
 
     # Hub push for trained policy

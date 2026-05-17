@@ -27,6 +27,7 @@ import gc
 import logging
 import resource
 import time as time_module
+from contextlib import contextmanager, nullcontext
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -96,6 +97,11 @@ class RECAPPiStarTrainingConfig:
     # Restores policy weights, optimizer/scheduler/RNG state, step counter,
     # and the original output_dir + wandb run id.
     resume_from: Path | None = None
+
+    # Exponential moving average over trainable params (0.0 disables; 0.999 typical).
+    # Shadow is kept in fp32 so the 1e-3 increment doesn't underflow bf16 weights.
+    # Eval, validation, "best"/"last" save, and final hub push all use EMA weights.
+    ema_decay: float = 0.0
 
     policy: PiStar06Config = field(
         default_factory=lambda: PiStar06Config(
@@ -210,6 +216,52 @@ def _resolve_policy_config(
     cfg.policy.c_fail = c_fail
     policy_cfg = cfg.policy
     return policy_cfg
+
+
+# ── EMA ──────────────────────────────────────────────────────────────────────
+
+
+class EMA:
+    """fp32 shadow of trainable params, updated each optimizer step.
+
+    Apply via ``with ema.apply_to(model):`` to swap shadow weights into the
+    live model for the duration of the block (eval / save), then restore.
+    """
+
+    def __init__(self, model, decay: float):
+        self.decay = decay
+        self.shadow: dict[str, torch.Tensor] = {
+            name: param.detach().clone().to(torch.float32)
+            for name, param in model.named_parameters()
+            if param.requires_grad
+        }
+
+    @torch.no_grad()
+    def update(self, model) -> None:
+        for name, param in model.named_parameters():
+            shadow = self.shadow.get(name)
+            if shadow is None:
+                continue
+            shadow.mul_(self.decay).add_(
+                param.detach().to(torch.float32), alpha=1.0 - self.decay
+            )
+
+    @contextmanager
+    def apply_to(self, model):
+        backup: dict[str, torch.Tensor] = {}
+        for name, param in model.named_parameters():
+            shadow = self.shadow.get(name)
+            if shadow is None:
+                continue
+            backup[name] = param.detach().clone()
+            param.data.copy_(shadow.to(param.dtype))
+        try:
+            yield
+        finally:
+            for name, param in model.named_parameters():
+                buf = backup.get(name)
+                if buf is not None:
+                    param.data.copy_(buf)
 
 
 # ── Validation ───────────────────────────────────────────────────────────────
@@ -811,6 +863,20 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
                 f"(optimizer + scheduler + RNG state restored)"
             )
 
+    # EMA shadow is initialised from current model weights (the loaded ones if
+    # resuming). Pre-resume EMA state is not persisted — restart fresh if that
+    # matters.
+    ema: EMA | None = None
+    if cfg.ema_decay > 0.0:
+        ema = EMA(accelerator.unwrap_model(policy), decay=cfg.ema_decay)
+        if is_main:
+            shadow_params = sum(t.numel() for t in ema.shadow.values())
+            shadow_gb = shadow_params * 4 / (1024**3)
+            logging.info(
+                f"EMA enabled: decay={cfg.ema_decay} "
+                f"shadow_params={shadow_params:,} (~{shadow_gb:.1f}GB fp32)"
+            )
+
     # ── 8. Training loop ─────────────────────────────────────────────────
     best_pc_success = -1.0
     history: list[dict] = []
@@ -878,6 +944,8 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
         scheduler.step()
+        if ema is not None:
+            ema.update(accelerator.unwrap_model(policy))
 
         if global_step == start_step + 1 and is_main:
             _log_memory("first-train-step")
@@ -892,51 +960,56 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
         )
         if is_sim_eval_step and is_main:
             unwrapped_policy = accelerator.unwrap_model(policy)
-            if isinstance(cfg.eval_cfg, LiberoPlusEvalConfig):
-                step_eval_metrics = run_libero_plus_eval(
-                    cfg.eval_cfg,
-                    policy=unwrapped_policy,
-                    env_preprocessor=env_preprocessor,
-                    env_postprocessor=env_postprocessor,
-                    preprocessor=preprocessor,
-                    postprocessor=postprocessor,
-                    seed=cfg.seed,
-                    videos_dir=output_dir / "eval" / f"videos_step_{global_step}",
-                    wandb_run=wandb_run,
-                    wandb_step=global_step,
-                )
-            else:
-                step_eval_metrics = run_libero_eval(
-                    cfg.eval_cfg,
-                    policy=unwrapped_policy,
-                    env_preprocessor=env_preprocessor,
-                    env_postprocessor=env_postprocessor,
-                    preprocessor=preprocessor,
-                    postprocessor=postprocessor,
-                    seed=cfg.seed,
-                    videos_dir=output_dir / "eval" / f"videos_step_{global_step}",
-                    wandb_run=wandb_run,
-                    wandb_step=global_step,
-                )
-            wandb_step_metrics.update(
-                {f"eval/{k}": v for k, v in step_eval_metrics.items()}
+            ema_ctx = (
+                ema.apply_to(unwrapped_policy) if ema is not None else nullcontext()
             )
-
-            pc_success = step_eval_metrics["pc_success"]
-            if pc_success > best_pc_success:
-                best_pc_success = pc_success
-                save_pistar_checkpoint(
-                    checkpoint_dir=checkpoints_dir / "best",
-                    step=global_step,
-                    cfg=cfg,
-                    policy=unwrapped_policy,
-                    optimizer=optimizer,
-                    scheduler=scheduler,
-                    preprocessor=preprocessor,
-                    postprocessor=postprocessor,
-                    metrics=step_eval_metrics,
+            with ema_ctx:
+                if isinstance(cfg.eval_cfg, LiberoPlusEvalConfig):
+                    step_eval_metrics = run_libero_plus_eval(
+                        cfg.eval_cfg,
+                        policy=unwrapped_policy,
+                        env_preprocessor=env_preprocessor,
+                        env_postprocessor=env_postprocessor,
+                        preprocessor=preprocessor,
+                        postprocessor=postprocessor,
+                        seed=cfg.seed,
+                        videos_dir=output_dir / "eval" / f"videos_step_{global_step}",
+                        wandb_run=wandb_run,
+                        wandb_step=global_step,
+                    )
+                else:
+                    step_eval_metrics = run_libero_eval(
+                        cfg.eval_cfg,
+                        policy=unwrapped_policy,
+                        env_preprocessor=env_preprocessor,
+                        env_postprocessor=env_postprocessor,
+                        preprocessor=preprocessor,
+                        postprocessor=postprocessor,
+                        seed=cfg.seed,
+                        videos_dir=output_dir / "eval" / f"videos_step_{global_step}",
+                        wandb_run=wandb_run,
+                        wandb_step=global_step,
+                    )
+                wandb_step_metrics.update(
+                    {f"eval/{k}": v for k, v in step_eval_metrics.items()}
                 )
-                logging.info(f"New best pc_success: {best_pc_success:.4f}")
+
+                pc_success = step_eval_metrics["pc_success"]
+                if pc_success > best_pc_success:
+                    best_pc_success = pc_success
+                    # Save inside the EMA context so "best" pretrained weights are EMA.
+                    save_pistar_checkpoint(
+                        checkpoint_dir=checkpoints_dir / "best",
+                        step=global_step,
+                        cfg=cfg,
+                        policy=unwrapped_policy,
+                        optimizer=optimizer,
+                        scheduler=scheduler,
+                        preprocessor=preprocessor,
+                        postprocessor=postprocessor,
+                        metrics=step_eval_metrics,
+                    )
+                    logging.info(f"New best pc_success: {best_pc_success:.4f}")
 
             policy.train()
         if is_sim_eval_step:
@@ -1002,16 +1075,21 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
             or global_step == cfg.train_steps
         )
         if is_val_step and is_main:
+            unwrapped_policy = accelerator.unwrap_model(policy)
+            ema_ctx = (
+                ema.apply_to(unwrapped_policy) if ema is not None else nullcontext()
+            )
             try:
-                val_metrics = _run_validation(
-                    accelerator.unwrap_model(policy),
-                    val_loader,
-                    preprocessor,
-                    advantage_lookup,
-                    success_by_episode,
-                    device,
-                    max_steps=cfg.max_val_steps,
-                )
+                with ema_ctx:
+                    val_metrics = _run_validation(
+                        unwrapped_policy,
+                        val_loader,
+                        preprocessor,
+                        advantage_lookup,
+                        success_by_episode,
+                        device,
+                        max_steps=cfg.max_val_steps,
+                    )
             except Exception as error:  # noqa: BLE001
                 if not is_known_video_validation_error(error):
                     policy.train()
@@ -1081,7 +1159,11 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
             repo_id = f"reece-omahoney/{cfg.job_name}"
             logging.info(f"Pushing PiStar06 policy to hub: {repo_id}")
             unwrapped_policy = accelerator.unwrap_model(policy)
-            unwrapped_policy.push_to_hub(repo_id)
+            ema_ctx = (
+                ema.apply_to(unwrapped_policy) if ema is not None else nullcontext()
+            )
+            with ema_ctx:
+                unwrapped_policy.push_to_hub(repo_id)
             preprocessor.push_to_hub(repo_id)
             postprocessor.push_to_hub(repo_id)
             HfApi().upload_file(

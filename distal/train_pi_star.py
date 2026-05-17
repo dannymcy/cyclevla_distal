@@ -35,7 +35,7 @@ import draccus
 import torch
 from accelerate import Accelerator
 from accelerate.utils import DistributedDataParallelKwargs, broadcast_object_list
-from lerobot.common.train_utils import save_training_state
+from lerobot.common.train_utils import load_training_state, save_training_state
 from lerobot.configs import parser
 from lerobot.configs.types import FeatureType
 from lerobot.datasets.factory import resolve_delta_timestamps
@@ -91,6 +91,12 @@ class RECAPPiStarTrainingConfig:
     sim_eval_every_n_train_steps: int = 500
     save_every_n_steps: int = 2000
 
+    # Resume from a previously saved checkpoint dir (e.g.
+    # outputs/pistar/<date>/<time>/checkpoints/step_00010000 or .../checkpoints/last).
+    # Restores policy weights, optimizer/scheduler/RNG state, step counter,
+    # and the original output_dir + wandb run id.
+    resume_from: Path | None = None
+
     policy: PiStar06Config = field(
         default_factory=lambda: PiStar06Config(
             pretrained_path=Path("lerobot/pi05_base"),
@@ -138,8 +144,17 @@ def _log_memory(label: str) -> None:
     logging.info(" ".join(parts))
 
 
-def _init_wandb(cfg: RECAPPiStarTrainingConfig):
-    """Initialise a W&B run if ``wandb_project`` is set, otherwise return ``None``."""
+def _init_wandb(
+    cfg: RECAPPiStarTrainingConfig,
+    output_dir: Path,
+    resume: bool = False,
+):
+    """Initialise a W&B run if ``wandb_project`` is set, otherwise return ``None``.
+
+    The run id is persisted to ``output_dir/wandb_run_id.txt`` on first init so
+    that a later resume can re-attach to the same run (charts continue rather
+    than starting a fresh series).
+    """
     if cfg.wandb_project is None:
         return None
     import os
@@ -151,12 +166,22 @@ def _init_wandb(cfg: RECAPPiStarTrainingConfig):
     in_sweep = "WANDB_SWEEP_ID" in os.environ
     wandb_name = None if (in_sweep or not cfg.job_name) else cfg.job_name
 
+    run_id_path = output_dir / "wandb_run_id.txt"
+    resume_id: str | None = None
+    if resume and run_id_path.is_file():
+        resume_id = run_id_path.read_text().strip() or None
+
     run = wandb.init(
         project=cfg.wandb_project,
         entity=cfg.wandb_entity,
         name=wandb_name,
         config=asdict(cfg),
+        id=resume_id,
+        resume="allow" if resume_id is not None else None,
     )
+    if resume_id is None:
+        run_id_path.parent.mkdir(parents=True, exist_ok=True)
+        run_id_path.write_text(run.id)
     logging.info(f"W&B run: {run.url}")
     return run
 
@@ -452,13 +477,31 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
     is_main = accelerator.is_main_process
     device = accelerator.device
 
+    # Resolve resume checkpoint dir once so all the resume branches can rely on
+    # the same Path object. The checkpoint must look like .../checkpoints/<step>/
+    # so that output_dir = resume_dir.parent.parent recovers the original run.
+    resume_dir: Path | None = None
+    if cfg.resume_from is not None:
+        resume_dir = Path(cfg.resume_from).expanduser().resolve()
+        if not (resume_dir / "training_state").is_dir():
+            raise NotADirectoryError(
+                f"resume_from={resume_dir} has no training_state/ subdir"
+            )
+        if not (resume_dir / "pretrained_model" / "model.safetensors").is_file():
+            raise FileNotFoundError(
+                f"resume_from={resume_dir} missing pretrained_model/model.safetensors"
+            )
+
     # Compute output_dir on main, then broadcast so all ranks share the same path.
     # Only main writes to it; typing it as a real Path everywhere avoids
     # `Path | None` operator issues in main-only branches.
     if is_main:
-        output_dir = Path("outputs/pistar") / datetime.now().strftime(
-            "%Y-%m-%d/%H-%M-%S"
-        )
+        if resume_dir is not None:
+            output_dir = resume_dir.parent.parent
+        else:
+            output_dir = Path("outputs/pistar") / datetime.now().strftime(
+                "%Y-%m-%d/%H-%M-%S"
+            )
     else:
         output_dir = Path()
     output_dir_buf: list[Path] = [output_dir]
@@ -468,10 +511,16 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
 
     if is_main:
         checkpoints_dir.mkdir(parents=True, exist_ok=True)
-        write_json(draccus.encode(cfg), output_dir / "train_config.json")
+        # Don't clobber the original train_config.json when resuming.
+        if resume_dir is None:
+            write_json(draccus.encode(cfg), output_dir / "train_config.json")
+        else:
+            logging.info(f"Resuming from {resume_dir}; reusing {output_dir}")
         logging.info(f"Using device: {device} (world_size={accelerator.num_processes})")
 
-    wandb_run = _init_wandb(cfg) if is_main else None
+    wandb_run = (
+        _init_wandb(cfg, output_dir, resume=resume_dir is not None) if is_main else None
+    )
 
     # ── 1. Load dataset and build episode-level train/val split ──────────
     if is_main:
@@ -604,7 +653,20 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
     if is_main:
         _log_memory("post-policy-init")
 
-    if cfg.policy.pretrained_path is not None:
+    if resume_dir is not None:
+        weights_path = resume_dir / "pretrained_model" / "model.safetensors"
+        logging.info(f"Resuming: loading PiStar06 weights from {weights_path}")
+        from safetensors.torch import load_file
+
+        sd = load_file(str(weights_path))
+        missing, unexpected = policy.load_state_dict(sd, strict=False)
+        del sd
+        gc.collect()
+        if missing:
+            logging.warning(f"Resume missing keys: {len(missing)}")
+        if unexpected:
+            logging.warning(f"Resume unexpected keys: {len(unexpected)}")
+    elif cfg.policy.pretrained_path is not None:
         pretrained_path = str(cfg.policy.pretrained_path)
         logging.info(f"Loading pretrained Pi0.5 weights from {pretrained_path}")
         from safetensors.torch import load_file
@@ -735,6 +797,20 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
         policy, optimizer, train_loader, scheduler
     )
 
+    # Restore optimizer/scheduler/RNG state and step counter on resume. Must
+    # happen after accelerator.prepare so the wrapped objects see the load.
+    start_step = 0
+    if resume_dir is not None:
+        start_step, optimizer, scheduler = load_training_state(
+            resume_dir, optimizer, scheduler
+        )
+        assert scheduler is not None  # scheduler was built above, so load preserves it
+        if is_main:
+            logging.info(
+                f"Resumed at step {start_step}/{cfg.train_steps} "
+                f"(optimizer + scheduler + RNG state restored)"
+            )
+
     # ── 8. Training loop ─────────────────────────────────────────────────
     best_pc_success = -1.0
     history: list[dict] = []
@@ -755,10 +831,16 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
     }
 
     if is_main:
-        logging.info(
-            f"Starting training: {cfg.train_steps} steps, "
-            f"{len(train_dataset)} train frames, {len(val_dataset)} val frames"
-        )
+        if start_step > 0:
+            logging.info(
+                f"Resuming training: step {start_step + 1} → {cfg.train_steps}, "
+                f"{len(train_dataset)} train frames, {len(val_dataset)} val frames"
+            )
+        else:
+            logging.info(
+                f"Starting training: {cfg.train_steps} steps, "
+                f"{len(train_dataset)} train frames, {len(val_dataset)} val frames"
+            )
         _log_memory("pre-training-loop")
 
     train_iter = cycle(train_loader)
@@ -766,10 +848,10 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
     optimizer.zero_grad(set_to_none=True)
 
     start_time = time_module.perf_counter()
-    last_log_step = 0
+    last_log_step = start_step
     last_log_time = start_time
 
-    for global_step in range(1, cfg.train_steps + 1):
+    for global_step in range(start_step + 1, cfg.train_steps + 1):
         # Pull a batch with retry on known video decode errors.
         while True:
             try:
@@ -797,7 +879,7 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
         optimizer.zero_grad(set_to_none=True)
         scheduler.step()
 
-        if global_step == 1 and is_main:
+        if global_step == start_step + 1 and is_main:
             _log_memory("first-train-step")
 
         step_loss = float(loss.item())

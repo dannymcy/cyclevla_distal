@@ -11,8 +11,9 @@ from huggingface_hub import HfApi
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.policies.factory import make_policy, make_pre_post_processors
-from lerobot.policies.pi05.modeling_pi05 import PI05Policy
+from lerobot.policies.pi05.modeling_pi05 import PI05Policy, make_att_2d_masks
 from lerobot.processor import rename_stats
+from lerobot.utils.constants import OBS_LANGUAGE_ATTENTION_MASK, OBS_LANGUAGE_TOKENS
 from lerobot.utils.device_utils import get_safe_torch_device
 from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.utils import init_logging, inside_slurm
@@ -44,6 +45,47 @@ def embed_siglip_pooled(policy: PI05Policy, batch: dict) -> torch.Tensor:
     embs = torch.cat(all_embs, dim=1)
     mask = torch.cat(all_masks, dim=1).unsqueeze(-1).float()
     return (embs.float() * mask).sum(dim=1) / mask.sum(dim=1)
+
+
+@torch.no_grad()
+def embed_post_lm_pooled(policy: PI05Policy, batch: dict) -> torch.Tensor:
+    """Mean-pool PaliGemma language-model output across the full prefix.
+
+    Runs image tokens + language tokens through SigLIP and the PaliGemma LM
+    (no action expert), then averages last-hidden-states over valid (non-pad)
+    prefix positions. Output dim = PaliGemma text hidden size (2048 for the
+    pi0.5 paligemma-3b-pt-224 backbone).
+    """
+    model = policy.model
+    images, img_masks = policy._preprocess_images(batch)
+    tokens = batch[OBS_LANGUAGE_TOKENS]
+    masks = batch[OBS_LANGUAGE_ATTENTION_MASK]
+
+    prefix_embs, prefix_pad_masks, prefix_att_masks = model.embed_prefix(
+        images, img_masks, tokens, masks
+    )
+
+    lm = model.paligemma_with_expert.paligemma.model.language_model
+    if lm.layers[0].self_attn.q_proj.weight.dtype == torch.bfloat16:
+        prefix_embs = prefix_embs.to(dtype=torch.bfloat16)
+
+    prefix_att_2d_masks = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
+    prefix_position_ids = (torch.cumsum(prefix_pad_masks, dim=1) - 1).long()
+    prefix_att_2d_masks_4d = model._prepare_attention_masks_4d(prefix_att_2d_masks)
+    # _prepare_attention_masks_4d returns an additive mask, which the eager
+    # attention path consumes directly.
+    lm.config._attn_implementation = "eager"
+
+    (prefix_output, _), _ = model.paligemma_with_expert.forward(
+        attention_mask=prefix_att_2d_masks_4d,
+        position_ids=prefix_position_ids,  # ty: ignore[invalid-argument-type]
+        past_key_values=None,
+        inputs_embeds=[prefix_embs, None],  # ty: ignore[invalid-argument-type]
+        use_cache=False,
+    )
+
+    mask = prefix_pad_masks.unsqueeze(-1).float()
+    return (prefix_output.float() * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1.0)
 
 
 def compute_mahalanobis_np(
@@ -148,8 +190,8 @@ class MahaStatsConfig:
     output_path: str = "outputs/maha/stats.safetensors"
     device: str = "cuda"
     batch_size: int = 256
-    num_workers: int = 16
-    max_frames: int | None = 100_000
+    num_workers: int = 4
+    max_frames: int | None = 50_000
     subsample_seed: int = 0
     rename_map: dict[str, str] = field(
         default_factory=lambda: {

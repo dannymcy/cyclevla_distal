@@ -28,7 +28,12 @@ from lerobot.processor import rename_stats
 from safetensors.numpy import load_file, save_file
 from torch.utils.data import DataLoader, Subset
 
-from distal.rewards.maha_stats import embed_siglip_pooled
+from distal.rewards.maha_stats import embed_post_lm_pooled, embed_siglip_pooled
+
+EMBEDDING_FNS = {
+    "siglip": embed_siglip_pooled,
+    "post_lm": embed_post_lm_pooled,
+}
 
 
 def embed_dataset(
@@ -41,8 +46,15 @@ def embed_dataset(
     max_frames: int | None,
     subsample_seed: int,
     desc: str,
+    embedding_type: str = "siglip",
 ) -> np.ndarray:
     """Embed every (optionally subsampled) frame and return (N, D) float32."""
+    if embedding_type not in EMBEDDING_FNS:
+        raise ValueError(
+            f"Unknown embedding_type {embedding_type!r}; "
+            f"expected one of {sorted(EMBEDDING_FNS)}"
+        )
+    embed_fn = EMBEDDING_FNS[embedding_type]
     loader_ds: LeRobotDataset | Subset = dataset
     if max_frames is not None and max_frames < len(dataset):
         rng = np.random.default_rng(subsample_seed)
@@ -58,7 +70,7 @@ def embed_dataset(
     )
     embs: list[torch.Tensor] = []
     total = len(loader)
-    logging.info(f"{desc}: {total} batches")
+    logging.info(f"{desc} ({embedding_type}): {total} batches")
     start = time.monotonic()
     for i, batch in enumerate(loader):
         batch = {
@@ -67,7 +79,7 @@ def embed_dataset(
         }
         batch = preprocessor(batch)
         with torch.no_grad():
-            emb = embed_siglip_pooled(policy, batch)
+            emb = embed_fn(policy, batch)
         embs.append(emb.cpu().float())
         done = i + 1
         if done % 100 == 0 or done == total:
@@ -87,6 +99,7 @@ def demo_embs_cache_path(
     demo_max_frames: int | None,
     demo_subsample_seed: int,
     demo_rename_map: dict[str, str],
+    embedding_type: str,
 ) -> Path:
     """Content-addressed local path for cached demo embeddings."""
     sig_dict = {
@@ -95,6 +108,7 @@ def demo_embs_cache_path(
         "demo_max_frames": demo_max_frames,
         "demo_subsample_seed": demo_subsample_seed,
         "demo_rename_map": demo_rename_map,
+        "embedding_type": embedding_type,
     }
     sig = hashlib.sha256(json.dumps(sig_dict, sort_keys=True).encode()).hexdigest()[:16]
     return Path(cache_dir) / f"{sig}.safetensors"
@@ -113,6 +127,7 @@ def load_or_embed_demos(
     batch_size: int,
     num_workers: int,
     cache_dir: str,
+    embedding_type: str = "siglip",
 ) -> np.ndarray:
     """Return demo embeddings, loading from local cache when available."""
     cache_path = demo_embs_cache_path(
@@ -122,6 +137,7 @@ def load_or_embed_demos(
         demo_max_frames=demo_max_frames,
         demo_subsample_seed=demo_subsample_seed,
         demo_rename_map=demo_rename_map,
+        embedding_type=embedding_type,
     )
     if cache_path.is_file():
         demo_embs = load_file(str(cache_path))["embeddings"]
@@ -149,6 +165,7 @@ def load_or_embed_demos(
         max_frames=demo_max_frames,
         subsample_seed=demo_subsample_seed,
         desc="Embedding demos",
+        embedding_type=embedding_type,
     )
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     save_file({"embeddings": demo_embs}, str(cache_path))
@@ -228,6 +245,7 @@ def compute_knn_distances_for_dataset(
     demo_subsample_seed: int,
     demo_rename_map: dict[str, str],
     demo_embs_cache_dir: str,
+    embedding_type: str = "siglip",
     frame_indices: list[int] | None = None,
 ) -> np.ndarray:
     """Return raw mean-of-k-nearest-neighbour distances for the dataset.
@@ -263,6 +281,7 @@ def compute_knn_distances_for_dataset(
             batch_size=batch_size,
             num_workers=num_workers,
             cache_dir=demo_embs_cache_dir,
+            embedding_type=embedding_type,
         )
         rollout_embs = embed_dataset(
             policy=policy,
@@ -274,6 +293,7 @@ def compute_knn_distances_for_dataset(
             max_frames=None,
             subsample_seed=0,
             desc="Embedding rollouts",
+            embedding_type=embedding_type,
         )
         logging.info(
             f"Computing kNN distances (k={knn_k}, metric={knn_metric}) "

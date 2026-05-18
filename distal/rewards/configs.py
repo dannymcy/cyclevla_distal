@@ -162,6 +162,9 @@ class KnnRewardConfig(RewardConfig):
         }
     )
     relative_mode: bool = False  # Use distance relative to initial frame
+    embedding_type: str = (
+        "siglip"  # "siglip" (vision-only) or "post_lm" (after PaliGemma LM)
+    )
 
     @property
     def demo_embs_cache_dir(self) -> str:
@@ -192,6 +195,7 @@ class KnnRewardConfig(RewardConfig):
             demo_subsample_seed=self.demo_subsample_seed,
             demo_rename_map=self.demo_rename_map,
             demo_embs_cache_dir=self.demo_embs_cache_dir,
+            embedding_type=self.embedding_type,
             frame_indices=frame_indices,
         )
         if self.relative_mode:
@@ -225,6 +229,7 @@ class KnnRewardConfig(RewardConfig):
             "demo_subsample_seed": self.demo_subsample_seed,
             "demo_rename_map": self.demo_rename_map,
             "relative_mode": self.relative_mode,
+            "embedding_type": self.embedding_type,
         }
         return load_or_compute_rewards(
             dataset=dataset,

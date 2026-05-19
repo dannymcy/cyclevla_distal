@@ -30,10 +30,7 @@ from torch.utils.data import DataLoader, Subset
 
 from distal.rewards.maha_stats import embed_post_lm_pooled, embed_siglip_pooled
 
-EMBEDDING_FNS = {
-    "siglip": embed_siglip_pooled,
-    "post_lm": embed_post_lm_pooled,
-}
+EMBEDDING_FNS = {"siglip": embed_siglip_pooled, "post_lm": embed_post_lm_pooled}
 
 
 def embed_dataset(

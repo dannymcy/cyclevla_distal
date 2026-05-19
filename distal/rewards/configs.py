@@ -22,7 +22,7 @@ class RewardConfig(draccus.ChoiceRegistry, abc.ABC):
     """Per-step reward source for value-network training.
 
     Subclasses are registered as draccus choices; pick one with
-    ``--reward.type=[steps|maha|knn]`` and override its fields.
+    ``--reward.type=[steps|maha|knn|variance]`` and override its fields.
     """
 
     # Cache computed per-frame rewards locally (HF_ASSETS_CACHE/distal/rewards),
@@ -148,7 +148,7 @@ class KnnRewardConfig(RewardConfig):
 
     base_policy: str = "lerobot/pi05-libero"
     embed_batch_size: int = 128
-    embed_num_workers: int = 4
+    embed_num_workers: int = 1
     k: int = 10
     metric: str = "l2"  # "l2" or "cosine"
     chunk_size: int = 4096
@@ -240,5 +240,75 @@ class KnnRewardConfig(RewardConfig):
                 label="kNN",
             ),
             label="knn",
+            use_cache=self.cache,
+        )
+
+
+@RewardConfig.register_subclass("variance")
+@dataclass
+class VarianceRewardConfig(RewardConfig):
+    """Normalized action-sample variance of the base policy at each frame.
+
+    For each observation, draws ``num_samples`` action chunks with independent
+    denoising noise from ``base_policy`` and uses the across-sample variance
+    (averaged over chunk timestep and action dim) as the per-frame
+    uncertainty signal. High variance → low reward, matching maha/knn.
+    """
+
+    base_policy: str = "lerobot/pi05-libero"
+    batch_size: int = 8
+    num_workers: int = 4
+    num_samples: int = 16
+    noise_seed: int = 0
+
+    def compute_distances(
+        self,
+        dataset: LeRobotDataset,
+        device: torch.device,
+        frame_indices: list[int] | None = None,
+    ) -> np.ndarray:
+        from distal.rewards.action_variance import compute_action_variance_for_dataset
+
+        return compute_action_variance_for_dataset(
+            dataset=dataset,
+            policy_path=self.base_policy,
+            device=device,
+            batch_size=self.batch_size,
+            num_workers=self.num_workers,
+            num_samples=self.num_samples,
+            noise_seed=self.noise_seed,
+            frame_indices=frame_indices,
+        )
+
+    def compute_step_rewards(
+        self,
+        dataset: LeRobotDataset,
+        device: torch.device,
+    ) -> dict[int, float]:
+        from distal.rewards.maha import (
+            load_or_compute_rewards,
+            normalize_distances_to_rewards,
+        )
+
+        logging.info(
+            f"Loading or computing action-variance rewards using {self.base_policy} "
+            f"(num_samples={self.num_samples}, dataset cache: {dataset.repo_id})..."
+        )
+        sig_dict = {
+            "mode": "variance",
+            "dataset_repo_id": dataset.repo_id,
+            "policy_path": self.base_policy,
+            "num_samples": self.num_samples,
+            "noise_seed": self.noise_seed,
+        }
+        return load_or_compute_rewards(
+            dataset=dataset,
+            sig_dict=sig_dict,
+            compute_fn=lambda: normalize_distances_to_rewards(
+                self.compute_distances(dataset, device),
+                dataset,
+                label="Variance",
+            ),
+            label="variance",
             use_cache=self.cache,
         )

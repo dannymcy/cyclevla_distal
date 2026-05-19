@@ -85,8 +85,8 @@ class RECAPPiStarTrainingConfig:
     job_name: str = "pistar-knn-libero-task-adv-pi05-base"
     dataset_repo_id: str = "reece-omahoney/pi05-libero-10"
 
-    train_steps: int = 20_000
-    batch_size: int = 64
+    train_steps: int = 4500
+    batch_size: int = 128
     num_workers: int = 4
     val_split_ratio: float = 0.1
     seed: int = 42
@@ -94,18 +94,9 @@ class RECAPPiStarTrainingConfig:
     log_every_n_steps: int = 100
     max_val_steps: int | None = 50
     sim_eval_every_n_train_steps: int = 500
-    save_every_n_steps: int = 2000
-
-    # Resume from a previously saved checkpoint dir (e.g.
-    # outputs/pistar/<date>/<time>/checkpoints/step_00010000 or .../checkpoints/last).
-    # Restores policy weights, optimizer/scheduler/RNG state, step counter,
-    # and the original output_dir + wandb run id.
+    save_every_n_steps: int = 500
+    ema_decay: float = 0.999
     resume_from: Path | None = None
-
-    # Exponential moving average over trainable params (0.0 disables; 0.999 typical).
-    # Shadow is kept in fp32 so the 1e-3 increment doesn't underflow bf16 weights.
-    # Eval, validation, "best"/"last" save, and final hub push all use EMA weights.
-    ema_decay: float = 0.0
 
     policy: PiStar06Config = field(
         default_factory=lambda: PiStar06Config(
@@ -114,6 +105,11 @@ class RECAPPiStarTrainingConfig:
             n_action_steps=10,
             gradient_checkpointing=True,
             compile_model=True,
+            freeze_vision_encoder=True,
+            optimizer_lr=5e-5,
+            scheduler_warmup_steps=500,
+            scheduler_decay_lr=5e-7,
+            scheduler_decay_steps=4500,
         )
     )
     advantage: AdvantageConfig = field(

@@ -35,6 +35,4 @@ envs:
 
 command: |-
   module load cuda/12.6
-  # VENV_DIR="$PWD/.pixi/envs/cu126" bash scripts/setup_libero.sh
-
-  pixi run -e cu126 python distal/train_pi_star.py
+  pixi run -e cu126 accelerate launch --multi_gpu --num_processes=2 distal/train_pi_star.py

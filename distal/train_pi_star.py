@@ -100,14 +100,14 @@ class RECAPPiStarTrainingConfig:
 
     policy: PiStar06Config = field(
         default_factory=lambda: PiStar06Config(
-            pretrained_path=Path("lerobot/pi05_base"),
+            pretrained_path=Path("lerobot/pi05_libero"),
             dtype="bfloat16",
             n_action_steps=10,
             gradient_checkpointing=True,
             compile_model=True,
-            freeze_vision_encoder=True,
+            train_expert_only=True,
             optimizer_lr=5e-5,
-            scheduler_warmup_steps=500,
+            scheduler_warmup_steps=1000,
             scheduler_decay_lr=5e-7,
             scheduler_decay_steps=4500,
         )

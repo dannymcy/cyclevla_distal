@@ -1,23 +1,30 @@
-host: u6jz.aip2.isambard
-remote_path: /home/u6jz/reece.u6jz/distal
+clusters:
+  isambard:
+    host: u6jz.aip2.isambard
+    remote_path: /home/u6jz/reece.u6jz/distal
+    time: 24
+    gpu: ""
+    ngpu: 2
+    cpus: 144
+    mem: 1600M
+    partition: workq
+    envs:
+      - PATH: $HOME/.local/bin:$HOME/.pixi/bin:$PWD/.pixi/envs/cu126/bin:$PATH
+      - LD_LIBRARY_PATH: $PWD/.pixi/envs/cu126/lib:$LD_LIBRARY_PATH
 
-time: 24
-gpu: ""
-ngpu: 1
-cpus: 72
-mem: 1600M
-partition: workq
-
-# host: htc
-# remote_path: /data/engs-robotics-ml/kebl6123/distal
-#
-# time: 12
-# gpu: h100
-# ngpu: 1
-# cpus: 16
-# mem: 8G
-# partition: short
-# priority: true
+  arc:
+    host: htc
+    remote_path: /data/engs-robotics-ml/kebl6123/distal
+    time: 12
+    gpu: h100
+    ngpu: 1
+    cpus: 16
+    mem: 8G
+    partition: short
+    priority: true
+    envs:
+      - PATH: $HOME/.local/bin:$HOME/.pixi/bin:$PWD/.pixi/envs/default/bin:$PATH
+      - LD_LIBRARY_PATH: $PWD/.pixi/envs/default/lib:$LD_LIBRARY_PATH
 
 envs:
   - WANDB_API_KEY
@@ -28,8 +35,6 @@ envs:
   - MKL_NUM_THREADS: 8
   - TORCHINDUCTOR_CACHE_DIR: $HOME/.cache/torchinductor
   - TRITON_CACHE_DIR: $HOME/.cache/triton
-  - PATH: $HOME/.local/bin:$HOME/.pixi/bin:$PWD/.pixi/envs/cu126/bin:$PATH
-  - LD_LIBRARY_PATH: $PWD/.pixi/envs/cu126/lib:$LD_LIBRARY_PATH
   - PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
   - CMAKE_POLICY_VERSION_MINIMUM: 3.5
 

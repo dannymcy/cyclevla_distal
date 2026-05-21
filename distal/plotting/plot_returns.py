@@ -57,14 +57,6 @@ def plot_return_curves(
         n_fail += int(success == 0)
         t = np.arange(returns.size)
         ax.plot(t, returns, color=color, linewidth=1.4, alpha=0.8, label=f"ep {ep_idx}")
-        ax.annotate(
-            f"ep {ep_idx}",
-            xy=(t[-1], returns[-1]),
-            xytext=(3, 0),
-            textcoords="offset points",
-            fontsize=7,
-            color=color,
-        )
         if steps_returns is not None:
             ax.plot(
                 np.arange(steps_returns.size),

@@ -209,6 +209,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/wayland-protocols-1.47-hd8ed1ab_0.conda
       - pypi: .
       - pypi: git+https://github.com/reeceomahoney/LIBERO-plus.git?rev=distal-deps#cd94bd60f521ff3a7c7e42de171eddbf4f7620e5
+      - pypi: git+https://github.com/reeceomahoney/lerobot-doctor?branch=distal#07597438ec38a89401cbfb353e58d2efb9b6cfd1
       - pypi: git+https://github.com/reeceomahoney/lerobot?branch=distal#e75115bd5b79521a30a6029eea732a766a3b4c13
       - pypi: git+https://github.com/reeceomahoney/skypilot.git?branch=vast-no-geo-pin#1b156c120ead15d10863ab1832b80b6a076ed08c
       - pypi: git+https://github.com/reeceomahoney/slurm-tools.git#23a53f49e1cb436fefdeefa51f52e995816198c2
@@ -458,7 +459,6 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/f4/7e/a72dd26f3b0f4f2bf1dd8923c85f7ceb43172af56d63c7383eb62b332364/pygments-2.20.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f4/a2/70401a107d6d7466d64b466927e6b96fcefa99d57494b972608e2f8be50f/scikit_image-0.26.0-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/f5/f9/cecaedaef9124e05d3b0e0c16ea717f2eae1df95297fa874d32c937087d5/runpod-1.9.0-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/f6/ed/795a2acf7c719f1d3e05357d2bfdd75d374b274299fda1b924c77172c961/lerobot_doctor-0.1.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f8/62/d9ba6323b9202dd2fe166beab8a86d29465c41a0288cbe229fac60c1ab8d/jsonlines-4.0.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/fb/76/641ae371508676492379f16e2fa48f4e2c11741bd63c48be4b12a6b09cba/aiosignal-1.4.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/fd/55/b3b49a1b97aabcfbbd6c7326df9cb0b6fa0c0aefa8e89d500939e04aa229/opencv_python-4.13.0.92-cp37-abi3-manylinux_2_28_x86_64.whl
@@ -668,6 +668,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2025c-hc9c84f9_1.conda
       - pypi: .
       - pypi: git+https://github.com/reeceomahoney/LIBERO-plus.git?rev=distal-deps#cd94bd60f521ff3a7c7e42de171eddbf4f7620e5
+      - pypi: git+https://github.com/reeceomahoney/lerobot-doctor?branch=distal#07597438ec38a89401cbfb353e58d2efb9b6cfd1
       - pypi: git+https://github.com/reeceomahoney/lerobot?branch=distal#e75115bd5b79521a30a6029eea732a766a3b4c13
       - pypi: git+https://github.com/reeceomahoney/skypilot.git?branch=vast-no-geo-pin#1b156c120ead15d10863ab1832b80b6a076ed08c
       - pypi: git+https://github.com/reeceomahoney/slurm-tools.git#23a53f49e1cb436fefdeefa51f52e995816198c2
@@ -912,7 +913,6 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/f3/f8/2d781e5e71d02fc829487e775ccb1185e72f95340d05f2e84eb57a11e093/av-15.1.0-cp312-cp312-manylinux_2_28_aarch64.whl
       - pypi: https://files.pythonhosted.org/packages/f4/7e/a72dd26f3b0f4f2bf1dd8923c85f7ceb43172af56d63c7383eb62b332364/pygments-2.20.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f5/f9/cecaedaef9124e05d3b0e0c16ea717f2eae1df95297fa874d32c937087d5/runpod-1.9.0-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/f6/ed/795a2acf7c719f1d3e05357d2bfdd75d374b274299fda1b924c77172c961/lerobot_doctor-0.1.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f8/35/8c80729f1ff76b3921d5c9487c7ac3de9b2a103b1cd05e905b3090513510/numpy-2.2.6-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
       - pypi: https://files.pythonhosted.org/packages/f8/62/d9ba6323b9202dd2fe166beab8a86d29465c41a0288cbe229fac60c1ab8d/jsonlines-4.0.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f8/e3/0fadc706008ac9d7b9b5be6dc767c05f9d3e5df51744ce4cc9605de7b9f4/charset_normalizer-3.4.7-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl
@@ -1084,6 +1084,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-1.3.2-h8088a28_2.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: .
+      - pypi: git+https://github.com/reeceomahoney/lerobot-doctor?branch=distal#07597438ec38a89401cbfb353e58d2efb9b6cfd1
       - pypi: git+https://github.com/reeceomahoney/lerobot?branch=distal#e75115bd5b79521a30a6029eea732a766a3b4c13
       - pypi: git+https://github.com/reeceomahoney/skypilot.git?branch=vast-no-geo-pin#1b156c120ead15d10863ab1832b80b6a076ed08c
       - pypi: git+https://github.com/reeceomahoney/slurm-tools.git#23a53f49e1cb436fefdeefa51f52e995816198c2
@@ -1290,7 +1291,6 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/f3/a2/43bbc5860b5034e2af4ef99a0e04d726ff329c43e192ef3abaa8d7ecfce5/python_multipart-0.0.28-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f4/7e/a72dd26f3b0f4f2bf1dd8923c85f7ceb43172af56d63c7383eb62b332364/pygments-2.20.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f5/f9/cecaedaef9124e05d3b0e0c16ea717f2eae1df95297fa874d32c937087d5/runpod-1.9.0-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/f6/ed/795a2acf7c719f1d3e05357d2bfdd75d374b274299fda1b924c77172c961/lerobot_doctor-0.1.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f8/62/d9ba6323b9202dd2fe166beab8a86d29465c41a0288cbe229fac60c1ab8d/jsonlines-4.0.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/fb/76/641ae371508676492379f16e2fa48f4e2c11741bd63c48be4b12a6b09cba/aiosignal-1.4.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/fd/7b/122376b1fd3c62c1ed9dc80c931ace4844b3c55407b6fb2d199377c9736f/pydantic-2.13.4-py3-none-any.whl
@@ -1500,6 +1500,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/wayland-protocols-1.47-hd8ed1ab_0.conda
       - pypi: .
       - pypi: git+https://github.com/reeceomahoney/LIBERO-plus.git?rev=distal-deps#cd94bd60f521ff3a7c7e42de171eddbf4f7620e5
+      - pypi: git+https://github.com/reeceomahoney/lerobot-doctor?branch=distal#07597438ec38a89401cbfb353e58d2efb9b6cfd1
       - pypi: git+https://github.com/reeceomahoney/lerobot?branch=distal#e75115bd5b79521a30a6029eea732a766a3b4c13
       - pypi: git+https://github.com/reeceomahoney/skypilot.git?branch=vast-no-geo-pin#1b156c120ead15d10863ab1832b80b6a076ed08c
       - pypi: git+https://github.com/reeceomahoney/slurm-tools.git#23a53f49e1cb436fefdeefa51f52e995816198c2
@@ -1749,7 +1750,6 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/f4/7e/a72dd26f3b0f4f2bf1dd8923c85f7ceb43172af56d63c7383eb62b332364/pygments-2.20.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f4/a2/70401a107d6d7466d64b466927e6b96fcefa99d57494b972608e2f8be50f/scikit_image-0.26.0-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/f5/f9/cecaedaef9124e05d3b0e0c16ea717f2eae1df95297fa874d32c937087d5/runpod-1.9.0-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/f6/ed/795a2acf7c719f1d3e05357d2bfdd75d374b274299fda1b924c77172c961/lerobot_doctor-0.1.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f8/62/d9ba6323b9202dd2fe166beab8a86d29465c41a0288cbe229fac60c1ab8d/jsonlines-4.0.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/fb/76/641ae371508676492379f16e2fa48f4e2c11741bd63c48be4b12a6b09cba/aiosignal-1.4.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/fd/55/b3b49a1b97aabcfbbd6c7326df9cb0b6fa0c0aefa8e89d500939e04aa229/opencv_python-4.13.0.92-cp37-abi3-manylinux_2_28_x86_64.whl
@@ -1959,6 +1959,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2025c-hc9c84f9_1.conda
       - pypi: .
       - pypi: git+https://github.com/reeceomahoney/LIBERO-plus.git?rev=distal-deps#cd94bd60f521ff3a7c7e42de171eddbf4f7620e5
+      - pypi: git+https://github.com/reeceomahoney/lerobot-doctor?branch=distal#07597438ec38a89401cbfb353e58d2efb9b6cfd1
       - pypi: git+https://github.com/reeceomahoney/lerobot?branch=distal#e75115bd5b79521a30a6029eea732a766a3b4c13
       - pypi: git+https://github.com/reeceomahoney/skypilot.git?branch=vast-no-geo-pin#1b156c120ead15d10863ab1832b80b6a076ed08c
       - pypi: git+https://github.com/reeceomahoney/slurm-tools.git#23a53f49e1cb436fefdeefa51f52e995816198c2
@@ -2203,7 +2204,6 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/f3/f8/2d781e5e71d02fc829487e775ccb1185e72f95340d05f2e84eb57a11e093/av-15.1.0-cp312-cp312-manylinux_2_28_aarch64.whl
       - pypi: https://files.pythonhosted.org/packages/f4/7e/a72dd26f3b0f4f2bf1dd8923c85f7ceb43172af56d63c7383eb62b332364/pygments-2.20.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f5/f9/cecaedaef9124e05d3b0e0c16ea717f2eae1df95297fa874d32c937087d5/runpod-1.9.0-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/f6/ed/795a2acf7c719f1d3e05357d2bfdd75d374b274299fda1b924c77172c961/lerobot_doctor-0.1.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f8/35/8c80729f1ff76b3921d5c9487c7ac3de9b2a103b1cd05e905b3090513510/numpy-2.2.6-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
       - pypi: https://files.pythonhosted.org/packages/f8/62/d9ba6323b9202dd2fe166beab8a86d29465c41a0288cbe229fac60c1ab8d/jsonlines-4.0.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f8/e3/0fadc706008ac9d7b9b5be6dc767c05f9d3e5df51744ce4cc9605de7b9f4/charset_normalizer-3.4.7-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl
@@ -2375,6 +2375,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-1.3.2-h8088a28_2.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: .
+      - pypi: git+https://github.com/reeceomahoney/lerobot-doctor?branch=distal#07597438ec38a89401cbfb353e58d2efb9b6cfd1
       - pypi: git+https://github.com/reeceomahoney/lerobot?branch=distal#e75115bd5b79521a30a6029eea732a766a3b4c13
       - pypi: git+https://github.com/reeceomahoney/skypilot.git?branch=vast-no-geo-pin#1b156c120ead15d10863ab1832b80b6a076ed08c
       - pypi: git+https://github.com/reeceomahoney/slurm-tools.git#23a53f49e1cb436fefdeefa51f52e995816198c2
@@ -2581,7 +2582,6 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/f3/a2/43bbc5860b5034e2af4ef99a0e04d726ff329c43e192ef3abaa8d7ecfce5/python_multipart-0.0.28-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f4/7e/a72dd26f3b0f4f2bf1dd8923c85f7ceb43172af56d63c7383eb62b332364/pygments-2.20.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f5/f9/cecaedaef9124e05d3b0e0c16ea717f2eae1df95297fa874d32c937087d5/runpod-1.9.0-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/f6/ed/795a2acf7c719f1d3e05357d2bfdd75d374b274299fda1b924c77172c961/lerobot_doctor-0.1.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f8/62/d9ba6323b9202dd2fe166beab8a86d29465c41a0288cbe229fac60c1ab8d/jsonlines-4.0.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/fb/76/641ae371508676492379f16e2fa48f4e2c11741bd63c48be4b12a6b09cba/aiosignal-1.4.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/fd/7b/122376b1fd3c62c1ed9dc80c931ace4844b3c55407b6fb2d199377c9736f/pydantic-2.13.4-py3-none-any.whl
@@ -2791,6 +2791,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/wayland-protocols-1.47-hd8ed1ab_0.conda
       - pypi: .
       - pypi: git+https://github.com/reeceomahoney/LIBERO-plus.git?rev=distal-deps#cd94bd60f521ff3a7c7e42de171eddbf4f7620e5
+      - pypi: git+https://github.com/reeceomahoney/lerobot-doctor?branch=distal#07597438ec38a89401cbfb353e58d2efb9b6cfd1
       - pypi: git+https://github.com/reeceomahoney/lerobot?branch=distal#e75115bd5b79521a30a6029eea732a766a3b4c13
       - pypi: git+https://github.com/reeceomahoney/skypilot.git?branch=vast-no-geo-pin#1b156c120ead15d10863ab1832b80b6a076ed08c
       - pypi: git+https://github.com/reeceomahoney/slurm-tools.git#23a53f49e1cb436fefdeefa51f52e995816198c2
@@ -3044,7 +3045,6 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/f4/7e/a72dd26f3b0f4f2bf1dd8923c85f7ceb43172af56d63c7383eb62b332364/pygments-2.20.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f4/a2/70401a107d6d7466d64b466927e6b96fcefa99d57494b972608e2f8be50f/scikit_image-0.26.0-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/f5/f9/cecaedaef9124e05d3b0e0c16ea717f2eae1df95297fa874d32c937087d5/runpod-1.9.0-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/f6/ed/795a2acf7c719f1d3e05357d2bfdd75d374b274299fda1b924c77172c961/lerobot_doctor-0.1.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f8/62/d9ba6323b9202dd2fe166beab8a86d29465c41a0288cbe229fac60c1ab8d/jsonlines-4.0.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/fb/76/641ae371508676492379f16e2fa48f4e2c11741bd63c48be4b12a6b09cba/aiosignal-1.4.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/fc/20/a46e60a496a17f1cf0cbdffb45e66dc015756e4dbce83580fd569e53e178/pyrealsense2-2.56.5.9235-cp312-cp312-manylinux1_x86_64.whl
@@ -3258,6 +3258,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2025c-hc9c84f9_1.conda
       - pypi: .
       - pypi: git+https://github.com/reeceomahoney/LIBERO-plus.git?rev=distal-deps#cd94bd60f521ff3a7c7e42de171eddbf4f7620e5
+      - pypi: git+https://github.com/reeceomahoney/lerobot-doctor?branch=distal#07597438ec38a89401cbfb353e58d2efb9b6cfd1
       - pypi: git+https://github.com/reeceomahoney/lerobot?branch=distal#e75115bd5b79521a30a6029eea732a766a3b4c13
       - pypi: git+https://github.com/reeceomahoney/skypilot.git?branch=vast-no-geo-pin#1b156c120ead15d10863ab1832b80b6a076ed08c
       - pypi: git+https://github.com/reeceomahoney/slurm-tools.git#23a53f49e1cb436fefdeefa51f52e995816198c2
@@ -3502,7 +3503,6 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/f3/f8/2d781e5e71d02fc829487e775ccb1185e72f95340d05f2e84eb57a11e093/av-15.1.0-cp312-cp312-manylinux_2_28_aarch64.whl
       - pypi: https://files.pythonhosted.org/packages/f4/7e/a72dd26f3b0f4f2bf1dd8923c85f7ceb43172af56d63c7383eb62b332364/pygments-2.20.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f5/f9/cecaedaef9124e05d3b0e0c16ea717f2eae1df95297fa874d32c937087d5/runpod-1.9.0-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/f6/ed/795a2acf7c719f1d3e05357d2bfdd75d374b274299fda1b924c77172c961/lerobot_doctor-0.1.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f8/35/8c80729f1ff76b3921d5c9487c7ac3de9b2a103b1cd05e905b3090513510/numpy-2.2.6-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
       - pypi: https://files.pythonhosted.org/packages/f8/62/d9ba6323b9202dd2fe166beab8a86d29465c41a0288cbe229fac60c1ab8d/jsonlines-4.0.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f8/e3/0fadc706008ac9d7b9b5be6dc767c05f9d3e5df51744ce4cc9605de7b9f4/charset_normalizer-3.4.7-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl
@@ -3674,6 +3674,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-1.3.2-h8088a28_2.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: .
+      - pypi: git+https://github.com/reeceomahoney/lerobot-doctor?branch=distal#07597438ec38a89401cbfb353e58d2efb9b6cfd1
       - pypi: git+https://github.com/reeceomahoney/lerobot?branch=distal#e75115bd5b79521a30a6029eea732a766a3b4c13
       - pypi: git+https://github.com/reeceomahoney/skypilot.git?branch=vast-no-geo-pin#1b156c120ead15d10863ab1832b80b6a076ed08c
       - pypi: git+https://github.com/reeceomahoney/slurm-tools.git#23a53f49e1cb436fefdeefa51f52e995816198c2
@@ -3880,7 +3881,6 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/f3/a2/43bbc5860b5034e2af4ef99a0e04d726ff329c43e192ef3abaa8d7ecfce5/python_multipart-0.0.28-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f4/7e/a72dd26f3b0f4f2bf1dd8923c85f7ceb43172af56d63c7383eb62b332364/pygments-2.20.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f5/f9/cecaedaef9124e05d3b0e0c16ea717f2eae1df95297fa874d32c937087d5/runpod-1.9.0-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/f6/ed/795a2acf7c719f1d3e05357d2bfdd75d374b274299fda1b924c77172c961/lerobot_doctor-0.1.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f8/62/d9ba6323b9202dd2fe166beab8a86d29465c41a0288cbe229fac60c1ab8d/jsonlines-4.0.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/fb/76/641ae371508676492379f16e2fa48f4e2c11741bd63c48be4b12a6b09cba/aiosignal-1.4.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/fd/7b/122376b1fd3c62c1ed9dc80c931ace4844b3c55407b6fb2d199377c9736f/pydantic-2.13.4-py3-none-any.whl
@@ -10911,6 +10911,18 @@ packages:
   - scikit-image
   - gymnasium
   requires_python: '>=3'
+- pypi: git+https://github.com/reeceomahoney/lerobot-doctor?branch=distal#07597438ec38a89401cbfb353e58d2efb9b6cfd1
+  name: lerobot-doctor
+  version: 0.1.0
+  requires_dist:
+  - pyarrow>=14.0
+  - huggingface-hub>=0.20
+  - av>=11.0
+  - rich>=13.0
+  - numpy>=1.24
+  - pytest>=7.0 ; extra == 'dev'
+  - pytest-tmp-files>=0.0.2 ; extra == 'dev'
+  requires_python: '>=3.10'
 - pypi: git+https://github.com/reeceomahoney/lerobot?branch=distal#e75115bd5b79521a30a6029eea732a766a3b4c13
   name: lerobot
   version: 0.5.2
@@ -17599,19 +17611,6 @@ packages:
   - urllib3>=1.26.6
   - watchdog>=3.0.0
   requires_python: '>=3.8'
-- pypi: https://files.pythonhosted.org/packages/f6/ed/795a2acf7c719f1d3e05357d2bfdd75d374b274299fda1b924c77172c961/lerobot_doctor-0.1.0-py3-none-any.whl
-  name: lerobot-doctor
-  version: 0.1.0
-  sha256: 97dabdf19afb8661103240d7654850eff122572c3b5fbed82d0ca71c0ee77e83
-  requires_dist:
-  - pyarrow>=14.0
-  - huggingface-hub>=0.20
-  - av>=11.0
-  - rich>=13.0
-  - numpy>=1.24
-  - pytest>=7.0 ; extra == 'dev'
-  - pytest-tmp-files>=0.0.2 ; extra == 'dev'
-  requires_python: '>=3.10'
 - pypi: https://files.pythonhosted.org/packages/f8/35/8c80729f1ff76b3921d5c9487c7ac3de9b2a103b1cd05e905b3090513510/numpy-2.2.6-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
   name: numpy
   version: 2.2.6

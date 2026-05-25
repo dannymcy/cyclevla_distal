@@ -48,7 +48,7 @@ future = ">=1.0.0"
 pre-commit = ">=4.5.1"
 ruff = ">=0.15.2"
 ty = ">=0.0.21"
-lerobot-doctor = ">=0.1.0, <0.2"
+lerobot-doctor = { git = "https://github.com/reeceomahoney/lerobot-doctor", branch = "distal" }
 
 [target.linux-64.pypi-dependencies]
 nvidia-npp-cu12 = ">=12,<13"

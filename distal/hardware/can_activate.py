@@ -1,11 +1,11 @@
 """Activate and configure CAN interfaces for Piper robot arms.
 
-Each -p argument maps a USB port to a CAN interface name and bitrate.
-Without -p, all detected interfaces are brought up at the default bitrate
-keeping their existing names.
+Each -p argument maps a USB port to a CAN interface name. Without -p, all
+detected interfaces are brought up at the default bitrate keeping their
+existing names.
 
 Example:
-    python can_activate.py -p 1-1:1.0=can_arm1=1000000 -p 1-2:1.0=can_arm2=1000000
+    python can_activate.py -p 1-1:1.0=can_arm1 -p 1-2:1.0=can_arm2
 """
 
 from __future__ import annotations
@@ -17,6 +17,8 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+
+BITRATE = 1_000_000
 
 
 def ip_link(*args: str) -> None:
@@ -55,14 +57,14 @@ def get_can_interfaces() -> list[dict[str, Any]]:
     return interfaces
 
 
-def configure(iface: dict[str, Any], target_name: str, bitrate: int) -> None:
+def configure(iface: dict[str, Any], target_name: str) -> None:
     """Set bitrate, rename, and bring up a CAN interface."""
     name = iface["name"]
 
-    needs_reconfig = not iface["is_up"] or iface["bitrate"] != bitrate
+    needs_reconfig = not iface["is_up"] or iface["bitrate"] != BITRATE
     if needs_reconfig:
         ip_link("set", name, "down")
-        ip_link("set", name, "type", "can", "bitrate", str(bitrate))
+        ip_link("set", name, "type", "can", "bitrate", str(BITRATE))
         ip_link("set", name, "up")
 
     if name != target_name:
@@ -70,7 +72,7 @@ def configure(iface: dict[str, Any], target_name: str, bitrate: int) -> None:
         ip_link("set", name, "name", target_name)
         ip_link("set", target_name, "up")
 
-    print(f"  {name} ({iface['bus_info']}) -> {target_name} @ {bitrate}")
+    print(f"  {name} ({iface['bus_info']}) -> {target_name} @ {BITRATE}")
 
 
 def main() -> None:
@@ -83,10 +85,9 @@ def main() -> None:
         "--port",
         dest="ports",
         action="append",
-        metavar="USB=NAME=BITRATE",
-        help="USB port mapping (repeatable), e.g. 1-1:1.0=can_arm1=1000000",
+        metavar="USB=NAME",
+        help="USB port mapping (repeatable), e.g. 1-1:1.0=can_arm1",
     )
-    parser.add_argument("--bitrate", type=int, default=1_000_000)
     args = parser.parse_args()
 
     subprocess.run(["modprobe", "gs_usb"], capture_output=True, check=False)
@@ -99,16 +100,16 @@ def main() -> None:
         by_bus = {i["bus_info"]: i for i in interfaces}
         for entry in args.ports:
             parts = entry.split("=")
-            if len(parts) != 3:
-                sys.exit(f"Error: invalid mapping '{entry}', use USB=NAME=BITRATE")
-            usb_addr, name, bitrate = parts[0], parts[1], int(parts[2])
+            if len(parts) != 2:
+                sys.exit(f"Error: invalid mapping '{entry}', use USB=NAME")
+            usb_addr, name = parts
             if usb_addr not in by_bus:
                 print(f"  Warning: no interface at USB port '{usb_addr}', skipping")
                 continue
-            configure(by_bus[usb_addr], name, bitrate)
+            configure(by_bus[usb_addr], name)
     else:
         for iface in interfaces:
-            configure(iface, iface["name"], args.bitrate)
+            configure(iface, iface["name"])
 
 
 if __name__ == "__main__":

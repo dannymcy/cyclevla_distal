@@ -101,7 +101,7 @@ class RECAPPiStarTrainingConfig:
 
     policy: PiStar06Config = field(
         default_factory=lambda: PiStar06Config(
-            pretrained_path=Path("lerobot/pi05_libero"),
+            pretrained_path=Path("reece-omahoney/pi05-remove-ethernet-2"),
             dtype="bfloat16",
             n_action_steps=10,
             gradient_checkpointing=True,
@@ -1043,16 +1043,21 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
             cfg.save_every_n_steps > 0 and global_step % cfg.save_every_n_steps == 0
         )
         if is_save_step and is_main:
-            save_pistar_checkpoint(
-                checkpoint_dir=checkpoints_dir / f"step_{global_step:08d}",
-                step=global_step,
-                cfg=cfg,
-                policy=accelerator.unwrap_model(policy),
-                optimizer=optimizer,
-                scheduler=scheduler,
-                preprocessor=preprocessor,
-                postprocessor=postprocessor,
+            unwrapped_policy = accelerator.unwrap_model(policy)
+            ema_ctx = (
+                ema.apply_to(unwrapped_policy) if ema is not None else nullcontext()
             )
+            with ema_ctx:
+                save_pistar_checkpoint(
+                    checkpoint_dir=checkpoints_dir / f"step_{global_step:08d}",
+                    step=global_step,
+                    cfg=cfg,
+                    policy=unwrapped_policy,
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    preprocessor=preprocessor,
+                    postprocessor=postprocessor,
+                )
             logging.info(f"Saved checkpoint at step {global_step}")
         if is_save_step:
             accelerator.wait_for_everyone()
@@ -1144,17 +1149,22 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
             history.append(saved_metrics)
             write_json(history, output_dir / "metrics_history.json")  # ty: ignore[invalid-argument-type]
 
-            save_pistar_checkpoint(
-                checkpoint_dir=checkpoints_dir / "last",
-                step=global_step,
-                cfg=cfg,
-                policy=accelerator.unwrap_model(policy),
-                optimizer=optimizer,
-                scheduler=scheduler,
-                preprocessor=preprocessor,
-                postprocessor=postprocessor,
-                metrics=saved_metrics,
+            unwrapped_policy = accelerator.unwrap_model(policy)
+            ema_ctx = (
+                ema.apply_to(unwrapped_policy) if ema is not None else nullcontext()
             )
+            with ema_ctx:
+                save_pistar_checkpoint(
+                    checkpoint_dir=checkpoints_dir / "last",
+                    step=global_step,
+                    cfg=cfg,
+                    policy=unwrapped_policy,
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    preprocessor=preprocessor,
+                    postprocessor=postprocessor,
+                    metrics=saved_metrics,
+                )
 
         if wandb_run is not None and wandb_step_metrics:
             wandb_run.log(wandb_step_metrics, step=global_step)

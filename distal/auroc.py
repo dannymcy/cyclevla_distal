@@ -149,6 +149,17 @@ def main(cfg: AurocConfig):
     frame_mask = np.isin(episode_index, list(selected_episodes))
     frame_indices = np.where(frame_mask)[0]
 
+    # Optionally subsample the scored frames (variance reward caps this).
+    n_before = len(frame_indices)
+    frame_indices = np.asarray(
+        cfg.reward.subsample_frame_indices(frame_indices.tolist()), dtype=int
+    )
+    if len(frame_indices) < n_before:
+        print(
+            f"Subsampled {n_before} -> {len(frame_indices)} frames for "
+            f"distance computation"
+        )
+
     distances = cfg.reward.compute_distances(
         dataset=dataset,
         device=device,
@@ -163,7 +174,8 @@ def main(cfg: AurocConfig):
         "max": lambda d: float(d.max()),
     }
 
-    episodes = sorted(selected_episodes)
+    # Derive from surviving frames: subsampling can drop an episode entirely.
+    episodes = sorted({int(ep) for ep in selected_episode_index})
     ep_success = {}
     ep_scores: dict[str, dict[int, float]] = {name: {} for name in aggregators}
     for ep in episodes:

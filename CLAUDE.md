@@ -1,10 +1,46 @@
-# CLAUDE.md
+# CycleVLA — Real Robot Experiment
 
-This file provides guidance to Claude Code (claude.ai/code) when working with
-code in this repository.
+Real-robot experiment for CycleVLA, built on top of **DistAL**. Goal: teleoperate
+three tasks on the AgileX PiPER arm, train PI0.5 on the collected data, and eval
+on the real robot.
 
-## Project Overview
+**Read first:** `/home/kai/Projects/cyclevla_code/README.md` (CycleVLA entry
+point), then `/home/kai/Projects/cyclevla_code/PI.md` (training steps).
 
+## Workflow
+
+1. Teleoperate three tasks with the AgileX PiPER arm; data auto-saves as LeRobot
+   format to `/home/kai/Projects/cyclevla_distal/data`.
+2. Run **Step 2 — Compute Normalization Statistics** in `PI.md` directly on the
+   saved dataset, then continue from there to train PI0.5.
+3. Eval on the real robot. Inference logic must match exactly:
+   - `experiments/robot/libero/run_libero_eval_openpi_transit.py`
+   - `experiments/robot/libero/run_libero_eval_openpi_cyclevla.py`
+
+## Open TODOs
+
+1. **Disable the second PiPER set.** We have two sets (each = main arm + teleop
+   arm); we only want one. Decide: leave the left set idle, or unplug it. Method
+   unknown — needs investigation before relying on single-arm teleop. [x]
+   *Done: config-driven `sides` knob on `PiperConfig`/`PiperTeleoperatorConfig`
+   (default `["right"]`); the idle set's CAN interface is never opened. Flip
+   `sides` in `record.yaml` to switch. Software-disable only; leave the other set
+   idle.*
+2. **Verify teleop data capture.** Confirm teleoperation saves correctly to
+   `/home/kai/Projects/cyclevla_distal/data`. Check the record command and
+   whether that path is gitignored. [ ]
+
+## DOs (Very Important)
+
+1. Make a clear plan first, and ask questions before making changes.
+2. This codebase is complex and tightly coupled.  
+   Read and understand all relevant files before attempting any optimization or refactoring.
+3. When modifying anything related to official specifications (e.g., robot parameters, hardware limits, kinematics), always verify using official documentation or reliable online resources.
+4. Write clear and explicit comments in the code explaining **why** something is done a certain way—not just **what** is done.
+
+---
+
+# DistAL (Base Pipeline)
 DistAL: a RECAP-style RL pipeline for fine-tuning Pi0.5 with advantage
 conditioning and Mahalanobis-distance-based rewards, built on a fork of
 HuggingFace LeRobot. Primary evaluation target is LIBERO simulation; also

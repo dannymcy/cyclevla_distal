@@ -15,9 +15,15 @@ class PiperTeleoperator(Teleoperator):
     def __init__(self, config: PiperTeleoperatorConfig):
         super().__init__(config)
         self.config = config
+        # Only open CAN interfaces for the active side(s); the idle teleop set is
+        # never connected.
+        interface_by_side = {
+            "left": self.config.can_interface_left,
+            "right": self.config.can_interface_right,
+        }
         self.arms = {
-            "left": C_PiperInterface_V2(self.config.can_interface_left),
-            "right": C_PiperInterface_V2(self.config.can_interface_right),
+            side: C_PiperInterface_V2(interface_by_side[side])
+            for side in self.config.sides
         }
         self._is_piper_connected = False
 

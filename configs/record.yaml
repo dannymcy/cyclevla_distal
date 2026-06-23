@@ -1,12 +1,27 @@
 robot:
   type: piper
+  sides: [left]      # active arm set; set to [left] to use the other set instead
+  # Per-side, per-joint home targets (milli-deg) used by distal/hardware/zero.py.
+  # [0]*6 = all zeros. Capture a hand-set pose with:
+  #   pixi run python distal/hardware/read_pose.py --interfaces can_arm_left
+  home_pose:
+    left:  [-90000, 0, 0, 90000, 0, -90000]
+    left: [90000, 0, 0, -90000, 0, 90000]
+  # Per-side gripper home state used by zero.py: open | closed
+  home_gripper:
+    left:  open
+    left: open
 
 teleop:
   type: piper_teleop
+  sides: [left]      # must match robot.sides so recorded actions line up
 
 dataset:
-  repo_id: kai/test
-  single_task: Test
+  # Saved to $HF_LEROBOT_HOME/<repo_id>; the `record` pixi task points
+  # HF_LEROBOT_HOME at ./data, so this lands in data/cyclevla/real_robot_decomposed_progress.
+  # repo_id must match the openpi TrainConfig used for real-robot PI0.5 finetuning.
+  repo_id: cyclevla/real_robot_decomposed_progress
+  single_task: Test  # set to the task's language instruction before recording
   fps: 20
   episode_time_s: 600
   reset_time_s: 15

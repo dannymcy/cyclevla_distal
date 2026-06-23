@@ -111,6 +111,11 @@ cmd = "lerobot-eval --config_path=configs/eval.yaml"
 
 [tasks.record]
 description = "Record demonstrations via teleop"
+# Redirect the LeRobot dataset store into the project `data/` folder so recordings
+# land at data/<repo_id> and stay loadable by openpi training/compute_norm_stats via
+# the same repo_id (openpi resolves $HF_LEROBOT_HOME/<repo_id> with no root override).
+# Scoped to `record` so base-policy train/eval keep their normal HF cache.
+env = { HF_LEROBOT_HOME = "/home/kai/Projects/cyclevla_distal/data" }
 cmd = "lerobot-record --config_path=configs/record.yaml"
 
 [tasks.rollout]

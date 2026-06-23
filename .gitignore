@@ -22,3 +22,7 @@ lerobot/
 .envrc
 
 *.npz
+
+# Data and APIS
+.env
+data/

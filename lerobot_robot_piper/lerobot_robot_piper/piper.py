@@ -22,9 +22,15 @@ class Piper(Robot):
     def __init__(self, config: PiperConfig):
         super().__init__(config)
         self.config = config
+        # Only open CAN interfaces for the active side(s); the idle set is never
+        # connected, so connect()'s EnablePiper() loop won't hang on a missing arm.
+        interface_by_side = {
+            "left": self.config.can_interface_left,
+            "right": self.config.can_interface_right,
+        }
         self.arms = {
-            "left": C_PiperInterface_V2(self.config.can_interface_left),
-            "right": C_PiperInterface_V2(self.config.can_interface_right),
+            side: C_PiperInterface_V2(interface_by_side[side])
+            for side in self.config.sides
         }
         self.cameras = make_cameras_from_configs(config.cameras)
         self._is_piper_connected = False

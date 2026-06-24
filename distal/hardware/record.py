@@ -67,6 +67,8 @@ from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.utils import init_logging, log_say
 from lerobot.utils.visualization_utils import init_rerun
 
+from distal.hardware import subtasks
+from distal.hardware.decompose_videos import export_clips_for_dataset
 from distal.hardware.zero import SIDE_TO_INTERFACE, home_master_slave
 
 # One mp4 per episode (per camera) for easy debugging. LeRobot rolls a new video
@@ -80,11 +82,22 @@ from distal.hardware.zero import SIDE_TO_INTERFACE, home_master_slave
 PER_EPISODE_VIDEO_FILE_SIZE_MB = 0.001
 
 
-def init_keyboard_listener():
-    """Like LeRobot's `init_keyboard_listener` but adds a SPACE -> `start_next`
-    event used to gate the start of the next episode after homing. ->/<-/Esc keep
-    their stock meaning so `record_loop` (which only reads `exit_early`) is
-    unchanged. Returns `(listener, events)`; `listener` is None when headless."""
+def init_keyboard_listener(robot=None):
+    """Like LeRobot's `init_keyboard_listener` but adds two extra keys on top of
+    the stock ->/<-/Esc:
+
+      * SPACE -> `start_next`, used to gate the start of the next episode after
+        homing; and
+      * 'y' -> `robot.bump_subtask()`, marking the END of the current subtask
+        live during teleop. Because the bump increments the robot's
+        `current_subtask` immediately and every frame stamps `subtask_index`, the
+        boundary is frame-accurate with no sidecar. Press 'y' after each subtask
+        EXCEPT the last (the episode's save closes the final subtask), so a task
+        with K subtasks needs K-1 presses.
+
+    ->/<-/Esc keep their stock meaning so `record_loop` (which only reads
+    `exit_early`) is unchanged. Returns `(listener, events)`; `listener` is None
+    when headless."""
     events = {}
     events["exit_early"] = False
     events["rerecord_episode"] = False
@@ -94,7 +107,8 @@ def init_keyboard_listener():
     if is_headless():
         logging.warning(
             "Headless environment detected. Keyboard inputs will not be available; "
-            "episode gating (SPACE) and ->/<-/Esc controls are disabled."
+            "episode gating (SPACE), subtask marking ('y') and ->/<-/Esc controls "
+            "are disabled."
         )
         return None, events
 
@@ -116,6 +130,13 @@ def init_keyboard_listener():
             elif key == keyboard.Key.space:
                 print("Space pressed. Starting next episode...")
                 events["start_next"] = True
+            elif hasattr(key, "char") and key.char == "y" and robot is not None:
+                # Mark the end of the current subtask; subsequent frames are
+                # stamped with the incremented index.
+                robot.bump_subtask()
+                print(
+                    f"'y' pressed. Subtask boundary -> index {robot.current_subtask}."
+                )
         except Exception as e:
             print(f"Error handling key press: {e}")
 
@@ -167,6 +188,14 @@ def resolve_dataset_root(cfg: RecordConfig) -> Path:
 def record(cfg: RecordConfig) -> LeRobotDataset:
     init_logging()
     logging.info(pformat(asdict(cfg)))
+
+    # Resolve how many subtasks this task should have, BEFORE touching hardware, so
+    # a misconfigured `single_task` fails fast. get_subtasks raises (listing the
+    # valid tasks) if `single_task` isn't registered in distal/hardware/subtasks.py
+    # — this also catches the stale `single_task: Test`. Used to validate, per
+    # episode, that the operator pressed 'y' the right number of times.
+    expected_subtasks = len(subtasks.get_subtasks(cfg.dataset.single_task))
+
     if cfg.display_data:
         init_rerun(session_name="recording", ip=cfg.display_ip, port=cfg.display_port)
     display_compressed_images = (
@@ -274,7 +303,11 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
         if teleop is not None:
             teleop.connect()
 
-        listener, events = init_keyboard_listener()
+        listener, events = init_keyboard_listener(robot=robot)
+
+        # Remember how many episodes already existed so we only export the ones
+        # added this session as per-subtask debug clips (see finally block).
+        episodes_before = dataset.num_episodes
 
         with VideoEncodingManager(dataset):
             # Home before the FIRST episode too (safety): the arm starts at a known
@@ -289,6 +322,16 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 and not events["stop_recording"]
             ):
                 log_say(f"Recording episode {dataset.num_episodes}", cfg.play_sounds)
+                print(
+                    f">>> Task has {expected_subtasks} subtask(s): press 'y' "
+                    f"{expected_subtasks - 1} time(s) (at the end of each subtask "
+                    f"except the last)."
+                )
+                # Each episode's subtask numbering starts at 0 (first subtask);
+                # 'y' presses during record_loop advance it. Reset here so it
+                # covers the first episode, between-episode, and re-record paths
+                # (all of which re-enter this record_loop call).
+                robot.reset_subtask()
                 record_loop(
                     robot=robot,
                     events=events,
@@ -310,6 +353,34 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                     log_say("Re-record episode", cfg.play_sounds)
                     events["rerecord_episode"] = False
                     events["exit_early"] = False
+                    dataset.clear_episode_buffer()
+                    if not events["stop_recording"]:
+                        home_active_sides(robot, cfg.play_sounds)
+                        wait_for_start(events, cfg.play_sounds)
+                    continue
+
+                # Subtask-count validation: the operator must have marked EXACTLY
+                # this task's subtasks — final index == expected-1 AND every index
+                # 0..expected-1 actually got >=1 frame. This catches under-press
+                # (missing high indices), over-press (extra index / final too high),
+                # and a 0-frame middle subtask from a rapid double-'y'. A bad episode
+                # is DISCARDED here so it never reaches the dataset (the convert can't
+                # fix a wrong number of subtask marks). Mirrors the <- re-record path.
+                subtasks_ok = (
+                    robot.current_subtask == expected_subtasks - 1
+                    and robot.subtask_indices_seen == set(range(expected_subtasks))
+                )
+                if not subtasks_ok:
+                    log_say("Wrong subtask count, discarding episode", cfg.play_sounds)
+                    events["exit_early"] = False
+                    seen = sorted(robot.subtask_indices_seen)
+                    print(
+                        f"\n>>> DISCARDED: marked subtask indices {seen} (final "
+                        f"index {robot.current_subtask}), but the task needs all of "
+                        f"{list(range(expected_subtasks))}. Press 'y' exactly "
+                        f"{expected_subtasks - 1} time(s), once at the end of each "
+                        f"subtask except the last.\n"
+                    )
                     dataset.clear_episode_buffer()
                     if not events["stop_recording"]:
                         home_active_sides(robot, cfg.play_sounds)
@@ -343,6 +414,23 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
 
         if dataset:
             dataset.finalize()
+
+            # Best-effort: after the dataset is finalized (videos encoded, parquet
+            # flushed) export one debug mp4 per subtask per episode/camera for the
+            # episodes added this session, split on the `subtask_index` column. A
+            # failure here must never lose the just-recorded data, so it is wrapped.
+            try:
+                added = list(range(episodes_before, dataset.num_episodes))
+                if added and not is_headless():
+                    out_dir = resolve_dataset_root(cfg) / "videos_decomposed"
+                    written = export_clips_for_dataset(
+                        dataset, out_dir, label_source="subtask_index", episodes=added
+                    )
+                    print(
+                        f">>> Wrote {len(written)} per-subtask debug clips to {out_dir}"
+                    )
+            except Exception as e:
+                logging.warning(f"Per-subtask clip export failed (non-fatal): {e}")
 
         if robot.is_connected:
             robot.disconnect()

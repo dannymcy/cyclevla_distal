@@ -21,7 +21,12 @@ dataset:
   # HF_LEROBOT_HOME at ./data, so this lands in data/cyclevla/real_robot_decomposed_progress.
   # repo_id must match the openpi TrainConfig used for real-robot PI0.5 finetuning.
   repo_id: cyclevla/real_robot_decomposed_progress
-  single_task: Test  # set to the task's language instruction before recording
+  # High-level task instruction, baked into every frame as `task`. It MUST be one
+  # of the keys in distal/hardware/subtasks.py (the convert maps it to that task's
+  # ordered subtask list). During teleop, press 'y' to mark the end of each subtask
+  # (K subtasks -> K-1 presses); the per-frame `subtask_index` drives the offline
+  # decomposition in distal/hardware/convert_to_cyclevla.py. Change this per task.
+  single_task: pick up the black bowl and place it on the plate
   fps: 20
   episode_time_s: 600  # upper bound per episode; press -> to end+save early
   # reset_time_s is UNUSED by distal/hardware/record.py: instead of a blind timed

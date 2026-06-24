@@ -49,6 +49,88 @@ point), then `/home/kai/Projects/cyclevla_code/PI.md` (training steps).
    camera (`video_files_size_in_mb` set tiny for debuggability); the data parquet
    stays concatenated. NOTE: set `single_task` to the real instruction before
    collecting real data — it is baked into every frame.*
+4. **Align the teleop dataset to the CycleVLA schema for norm-stats + PI0.5
+   training.** [impl done + v2.1 pipeline verified loading; pending a full real
+   recording]
+   *Goal: feed the read-only `cyclevla_code` `pi05_libero_cyclevla` config (Step 2
+   — Compute Normalization Statistics, then PI0.5 finetune) directly, with ZERO
+   edits to `cyclevla_code`. The sim schema is absolute-EEF state (8-D) + delta-EEF
+   action (9-D) `[ΔEEF(6), gripper, s_t stop, p_t progress]`, per-frame SUBTASK
+   language; our teleop recorded joint-space (7-D) with a single task. Changes, all
+   on the distal side:*
+   - *`lerobot_robot_piper/piper.py`: also record live EEF
+     (`GetArmEndPoseMsgs`, 0.001 mm/deg → m/rad) and a per-frame `subtask_index`
+     (LeRobot folds both into `observation.state`); joints/gripper kept.*
+   - *`distal/hardware/record.py`: `y` key → `robot.bump_subtask()` marks a subtask
+     boundary live (frame-accurate); reset per episode. After finalize, best-effort
+     export per-subtask debug clips to `videos_decomposed/`.*
+   - *`distal/hardware/subtasks.py`: 3 PLACEHOLDER tasks (4/8/8 subtasks, revise
+     before real collection); gripper subtasks contain "gripper" to trigger the
+     oversample branch. `record.yaml single_task` must be one of these keys.*
+   - *`distal/hardware/convert_to_cyclevla.py` (**Stage A**, distal env): raw →
+     CycleVLA schema (state 8-D EEF+2-D gripper `[g,-g]`, action 9-D
+     ΔEEF+gripper+s_t+p_t, cams →`image`/`wrist_image`, per-subtask `task`). Keeps
+     native 20 fps. Per subtask: DROID-style no-op filter → fractional progress p_t
+     0.1→0.9 + tail oversample (gripper last frame ×8, else last 3 ×4,
+     s_t=1/p_t=1.0) — mirrors the Stage-3 RLDS builder. Writes a version-NEUTRAL
+     intermediate (per-episode mp4 + `manifest.parquet` + `meta.json`; ~1.5 MB, no
+     PNG folder), not a LeRobot dataset; skips a corrupt/missing-video episode
+     instead of crashing. Also exports post-process debug clips.*
+   - *`distal/hardware/intermediate_to_v21.py` (**Stage B**, run in the openpi `uv`
+     env): self-contained (only `lerobot.common.datasets` v2.1 + pyarrow + pyav),
+     decodes the intermediate mp4s + reads the manifest and writes the actual
+     **LeRobot v2.1** dataset (`create`→`add_frame`→`save_episode`) at repo_id
+     `cyclevla/libero_decomposed_progress` under `$HF_LEROBOT_HOME`. Uses **video
+     dtype** for `image`/`wrist_image` (NOT image dtype — v2.1 image dtype embeds
+     PNG bytes in the parquet, which bloated it to ~55 MB; video keeps the parquet
+     ~20 KB).*
+   - *`distal/hardware/decompose_videos.py`: shared per-subtask mp4 export
+     (ffmpeg rawvideo pipe), used by record (raw) and Stage A (post-process).*
+   - *CRITICAL FORMAT FACT: openpi's env runs **LeRobot v2.1**
+     (`lerobot.common.datasets`, `meta/tasks.jsonl`), but distal records in
+     **v3.0**; a v2.1 reader 401s on a v3.0 dataset. Hence the TWO-STAGE convert
+     (v3.0 read in distal → neutral intermediate → v2.1 write in openpi). Verified:
+     `compute_norm_stats --config-name pi05_libero_cyclevla` now LOADS the v2.1
+     output (only needs a dataset ≥ batch_size=256 frames to finish). Open detail:
+     gripper open/close polarity vs sim (norm stats absorb scale; confirm sign at
+     eval).*
+
+   **End-to-end workflow (four steps; `<distal>` = this repo, `<openpi>` =
+   cyclevla_code/openpi):**
+   1. *RECORD (distal): set `configs/record.yaml` `single_task` to one of the keys
+      in `distal/hardware/subtasks.py`, then `pixi run record`. During teleop: SPACE
+      starts an episode, **`y` marks the END of the current subtask** (no "select" —
+      each episode starts at subtask 0 and `y` advances; a K-subtask task needs K-1
+      presses, in order), `→` saves, `←` redoes, `Esc` stops. An episode whose `y`
+      marks don't cover exactly all K subtasks (under-, over-, or skipped) is
+      **auto-discarded** and re-prompted. Records **absolute** EEF (+joints+gripper)
+      live; raw debug clips → `data/<repo_id>/videos_decomposed/`.*
+   2. *STAGE A — process (distal): `pixi run python -m
+      distal.hardware.convert_to_cyclevla --src-root
+      data/cyclevla/real_robot_decomposed_progress` → writes a neutral intermediate
+      `data/cyclevla/real_robot_decomposed_progress_intermediate/` (per-episode mp4
+      + `manifest.parquet`) + post-process clips. Reads the raw read-only (never
+      deletes it). Add `--video-backend pyav` on hosts without CUDA/torchcodec.*
+   3. *STAGE B — write v2.1 (openpi env): `cd <openpi> &&
+      HF_LEROBOT_HOME=<distal>/data uv run python
+      <distal>/distal/hardware/intermediate_to_v21.py --intermediate
+      <distal>/data/cyclevla/real_robot_decomposed_progress_intermediate` → writes
+      the v2.1 dataset `data/cyclevla/libero_decomposed_progress`.*
+   4. *NORM-STATS + TRAIN (openpi env, same `HF_LEROBOT_HOME`): `cd <openpi> &&
+      HF_LEROBOT_HOME=<distal>/data uv run scripts/compute_norm_stats.py
+      --config-name pi05_libero_cyclevla`, then PI0.5 finetune per `PI.md` Step 3
+      (use a DISTINCT `<exp_name>`, e.g.
+      `CycleVLA_real_robot_decomposed_progress_pi05`; keep `action_horizon=10`).*
+
+   **Name-collision caveat (sim vs real).** Because we reuse repo_id
+   `cyclevla/libero_decomposed_progress` to satisfy the hardcoded config, and openpi
+   sets `asset_id = repo_id` (config.py:181), the real-robot
+   `compute_norm_stats` **overwrites** the sim norm-stats at
+   `openpi/assets/pi05_libero_cyclevla/cyclevla/libero_decomposed_progress/norm_stats.json`.
+   Back up/rename the sim asset (or use a separate openpi checkout) before computing
+   real, and use a **distinct training run name** for real vs sim — checkpoints are
+   run-named (not repo_id-named), and training bakes its own norm-stats copy into the
+   checkpoint, so each stays self-contained.
 
 ## DOs (Very Important)
 

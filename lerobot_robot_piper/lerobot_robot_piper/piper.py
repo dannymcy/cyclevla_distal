@@ -41,6 +41,19 @@ class Piper(Robot):
             else None
         )
         self.prev_action: dict[str, float] | None = None
+        # Live subtask index, advanced by the operator pressing 'y' during teleop
+        # (wired in distal/hardware/record.py). Recorded per frame as the
+        # `subtask_index` observation so the offline CycleVLA convert can segment
+        # subtasks and assign per-subtask language + stop/progress signals. Plain
+        # int increment is GIL-safe across the keyboard-listener thread.
+        self.current_subtask = 0
+        # Set of subtask indices that actually received >=1 frame this episode.
+        # record.py validates this against the task's expected subtask count to
+        # DISCARD episodes where the operator pressed 'y' the wrong number of times
+        # (under/over-press, or a 0-frame subtask from a rapid double-'y'). Only the
+        # main loop writes it (in get_observation); the keyboard thread touches the
+        # int, never the set.
+        self.subtask_indices_seen: set[int] = set()
 
     @property
     def _motors_ft(self) -> dict[str, type]:
@@ -51,10 +64,33 @@ class Piper(Robot):
         return {k: (c.height, c.width, 3) for k, c in self.cameras.items()}
 
     @property
+    def _eef_ft(self) -> dict[str, type]:
+        # 6-DOF end-effector pose per active side: [x, y, z, rx, ry, rz]. Recorded
+        # ALONGSIDE the joints (we keep both) so the offline CycleVLA convert can
+        # build the EEF state + delta-EEF action that the sim `pi05_libero_cyclevla`
+        # config expects (its state is absolute EEF, its action is delta EEF).
+        return {
+            f"{side}_eef_{ax}.pos": float
+            for side in self.arms
+            for ax in ("x", "y", "z", "rx", "ry", "rz")
+        }
+
+    @property
     def observation_features(self) -> dict:
-        ft = {**self._motors_ft, **self._cameras_ft}
+        # LeRobot concatenates all scalar-float observation features into a single
+        # `observation.state` vector (in this insertion order); images stay
+        # separate. Order: joints(6/side), gripper(1/side), EEF(6/side),
+        # subtask_index(1). The convert indexes by the recorded `names`, not
+        # position, so this order is for readability only.
+        ft: dict = {**self._motors_ft}
         for side in self.arms:
             ft[f"{side}_gripper.pos"] = float
+        ft.update(self._eef_ft)
+        # Per-frame subtask index (operator presses 'y' to advance). Drives the
+        # offline subtask segmentation + per-subtask language / stop-progress
+        # signals; not used at inference.
+        ft["subtask_index"] = float
+        ft.update(self._cameras_ft)
         return ft
 
     @property
@@ -129,10 +165,41 @@ class Piper(Robot):
                 obs[key] = value
             obs[f"{side}_gripper.pos"] = g.gripper_state.grippers_angle / 10000.0
 
+            # End-effector pose feedback (CAN 0x152-0x154). SDK units are
+            # 0.001 mm (X/Y/Z) and 0.001 deg (RX/RY/RZ); convert to SI (m, rad)
+            # so the recorded EEF is physically meaningful and matches the inverse
+            # conversion an EndPoseCtrl-based inference path would apply.
+            ep = arm.GetArmEndPoseMsgs().end_pose
+            obs[f"{side}_eef_x.pos"] = ep.X_axis * 1e-6
+            obs[f"{side}_eef_y.pos"] = ep.Y_axis * 1e-6
+            obs[f"{side}_eef_z.pos"] = ep.Z_axis * 1e-6
+            obs[f"{side}_eef_rx.pos"] = float(np.deg2rad(ep.RX_axis * 1e-3))
+            obs[f"{side}_eef_ry.pos"] = float(np.deg2rad(ep.RY_axis * 1e-3))
+            obs[f"{side}_eef_rz.pos"] = float(np.deg2rad(ep.RZ_axis * 1e-3))
+
+        # Stamp the current subtask index onto every frame (see __init__) and record
+        # that this index was actually observed (for record.py's per-episode count
+        # validation).
+        obs["subtask_index"] = float(self.current_subtask)
+        self.subtask_indices_seen.add(self.current_subtask)
+
         for cam_key, cam in self.cameras.items():
             obs[cam_key] = cam.async_read()
 
         return obs
+
+    def bump_subtask(self) -> None:
+        """Advance the live subtask index by one. Called when the operator presses
+        'y' during teleop to mark the END of the current subtask; the next frames
+        are then stamped with the incremented index. See `current_subtask`."""
+        self.current_subtask += 1
+
+    def reset_subtask(self) -> None:
+        """Reset the subtask index to 0 and clear the seen-set. Called at the start
+        of every episode so each episode's subtask numbering begins at the first
+        subtask and the count validation only sees this episode's marks."""
+        self.current_subtask = 0
+        self.subtask_indices_seen = set()
 
     @check_if_not_connected
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:

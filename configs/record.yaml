@@ -1,16 +1,16 @@
 robot:
   type: piper
-  sides: [left]      # active arm set; set to [left] to use the other set instead
-  # Per-side, per-joint home targets (milli-deg) used by distal/hardware/zero.py.
-  # [0]*6 = all zeros. Capture a hand-set pose with:
-  #   pixi run python distal/hardware/read_pose.py --interfaces can_arm_left
+  sides: [left]      # active arm set; set to [right] to use the other set instead
+  # NOTE: these home_pose / home_gripper values are IGNORED by homing. A teleop
+  # master-slave pair can only be homed to firmware ZERO (ReqMasterArmMoveToHome);
+  # a custom joint pose would need JointCtrl, which breaks the master-slave pairing.
+  # Kept only for reference (PiperConfig still validates them).
   home_pose:
     left:  [-90000, 0, 0, 90000, 0, -90000]
-    left: [90000, 0, 0, -90000, 0, 90000]
-  # Per-side gripper home state used by zero.py: open | closed
+    right: [90000, 0, 0, -90000, 0, 90000]
   home_gripper:
     left:  open
-    left: open
+    right: open
 
 teleop:
   type: piper_teleop

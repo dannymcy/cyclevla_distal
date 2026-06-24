@@ -4,6 +4,13 @@ Real-robot experiment for CycleVLA, built on top of **DistAL**. Goal: teleoperat
 three tasks on the AgileX PiPER arm, train PI0.5 on the collected data, and eval
 on the real robot.
 
+The rig has two PiPER sets (each = leader + follower); we record with the
+**left** set (`sides: [left]` in `record.yaml`) and leave the right set idle.
+Reason: the left set runs firmware `S-V1.8-7`, while the right runs `S-V1.7-3`,
+which predates the `ReqMasterArmMoveToHome` home command (CAN `0x191`, needs
+`≥ V1.7-4`); the right set cannot be auto-homed until its firmware is flashed
+(Windows `ArmRobotUA.exe` → Upgrade). Left stays the default until then.
+
 **Read first:** `/home/kai/Projects/cyclevla_code/README.md` (CycleVLA entry
 point), then `/home/kai/Projects/cyclevla_code/PI.md` (training steps).
 
@@ -19,14 +26,17 @@ point), then `/home/kai/Projects/cyclevla_code/PI.md` (training steps).
 
 ## Open TODOs
 
-1. **Disable the second PiPER set.** We have two sets (each = main arm + teleop
-   arm); we only want one. Decide: leave the left set idle, or unplug it. Method
-   unknown — needs investigation before relying on single-arm teleop. [x]
-   *Done: config-driven `sides` knob on `PiperConfig`/`PiperTeleoperatorConfig`
-   (default `["right"]`); the idle set's CAN interface is never opened. Flip
-   `sides` in `record.yaml` to switch. Software-disable only; leave the other set
-   idle.*
-2. **Verify teleop data capture.** Confirm teleoperation saves correctly to
+1. **Disable the second PiPER set.** [done]
+   *Config-driven `sides` knob on `PiperConfig`/`PiperTeleoperatorConfig`; the
+   idle set's CAN interface is never opened. `record.yaml` uses `sides: [left]`
+   (right idle); flip to switch. Software-disable only.*
+2. **Homing works.** [done]
+   *`distal/hardware/zero.py` homes the active `sides` set to zero via the
+   firmware return-to-zero `ReqMasterArmMoveToHome` (CAN `0x191`), which keeps
+   the master-slave pairing intact. JointCtrl homing was removed (it breaks the
+   pairing). Needs firmware `≥ V1.7-4`; the right set (`S-V1.7-3`) is too old —
+   hence the left default above.*
+3. **Verify teleop data capture.** Confirm teleoperation saves correctly to
    `/home/kai/Projects/cyclevla_distal/data`. Check the record command and
    whether that path is gitignored. [ ]
 

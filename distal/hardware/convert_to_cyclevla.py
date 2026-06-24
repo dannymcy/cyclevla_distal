@@ -52,7 +52,6 @@ import numpy as np
 from distal.hardware import subtasks
 from distal.hardware.decompose_videos import (
     export_subtask_clips_from_frames,
-    to_hwc_uint8,
     write_clip,
 )
 
@@ -216,39 +215,84 @@ def process_subtask(eef, grip, images, subtask_str, eps_pos, eps_ori, eps_grip):
     return out
 
 
-def episode_range(ep_meta):
-    """(start, end) global frame indices for an episode (v3.0 meta stores [v])."""
-
-    def sc(x):
-        return x[0] if isinstance(x, (list, tuple, np.ndarray)) else x
-
-    return int(sc(ep_meta["dataset_from_index"])), int(sc(ep_meta["dataset_to_index"]))
+def meta_scalar(x):
+    """Unwrap a possibly list-wrapped v3.0 metadata value."""
+    return x[0] if isinstance(x, (list, tuple, np.ndarray)) else x
 
 
-def build_episode_frames(src, ep, cam_map, idxs, eps):
-    """Read one raw episode and return (processed CycleVLA frames, n_raw, n_subtasks).
+def decode_video(path):
+    """Sequentially decode an mp4 -> list of HWC uint8 RGB frames (one fast pass,
+    no per-frame seeking)."""
+    import av
+
+    frames = []
+    with av.open(str(path)) as container:
+        for frame in container.decode(video=0):
+            frames.append(frame.to_ndarray(format="rgb24"))
+    return frames
+
+
+def load_raw_states(src_root):
+    """Read `observation.state` for every frame straight from the raw data
+    parquet(s), grouped by episode and ordered by `frame_index`. Returns
+    {episode_index: (N, D) float32}. This avoids LeRobot's per-frame __getitem__,
+    which decodes the video on every index (the Stage-A bottleneck)."""
+    import pyarrow.parquet as pq
+
+    files = sorted((src_root / "data").rglob("*.parquet"))
+    if not files:
+        raise FileNotFoundError(f"No data parquet under {src_root / 'data'}")
+    by_ep = {}
+    for f in files:
+        t = pq.read_table(
+            f, columns=["observation.state", "episode_index", "frame_index"]
+        )
+        for ep, fi, st in zip(
+            t.column("episode_index").to_pylist(),
+            t.column("frame_index").to_pylist(),
+            t.column("observation.state").to_pylist(),
+        ):
+            by_ep.setdefault(int(ep), []).append((int(fi), st))
+    out = {}
+    for ep, rows in by_ep.items():
+        rows.sort(key=lambda r: r[0])
+        out[ep] = np.asarray([r[1] for r in rows], dtype=np.float32)
+    return out
+
+
+def build_episode_frames(src_root, ep_meta, ep, state_arr, cam_map, idxs, eps, fps):
+    """Build one episode's processed CycleVLA frames from pre-read state + a single
+    sequential video decode per camera. Returns (frames, n_raw, n_subtasks). Raises
+    if a video is missing/corrupt so the caller can skip that episode.
 
     `idxs` = (eef_idx[6], grip_idx, subtask_idx) into `observation.state`;
-    `eps` = (eps_pos, eps_ori, eps_grip). Raises if a frame can't be decoded (the
-    caller skips the episode), so one corrupt/missing video doesn't kill the run."""
+    `eps` = (eps_pos, eps_ori, eps_grip)."""
     eef_idx, grip_idx, subtask_idx = idxs
-    start, end = episode_range(src.meta.episodes[ep])
-    n = end - start
-    eef = np.zeros((n, 6), dtype=np.float32)
-    grip = np.zeros(n, dtype=np.float32)
-    sub = np.zeros(n, dtype=np.int64)
-    images = {ok: [] for ok in cam_map.values()}
-    high_level = None
-    for j, i in enumerate(range(start, end)):
-        frame = src[i]
-        st = np.asarray(frame["observation.state"], dtype=np.float32)
-        eef[j] = st[eef_idx]
-        grip[j] = st[grip_idx]
-        sub[j] = int(round(float(st[subtask_idx])))
-        for sk, ok in cam_map.items():
-            images[ok].append(to_hwc_uint8(frame[sk]))
-        if high_level is None:
-            high_level = frame["task"]
+    n = len(state_arr)
+    eef = state_arr[:, list(eef_idx)]
+    grip = state_arr[:, grip_idx]
+    sub = np.rint(state_arr[:, subtask_idx]).astype(np.int64)
+
+    tasks = ep_meta["tasks"]
+    high_level = tasks[0] if isinstance(tasks, (list, tuple, np.ndarray)) else tasks
+
+    # One sequential decode per camera; slice this episode's frames by its
+    # from_timestamp offset (== 0 for our one-file-per-episode recordings).
+    images = {}
+    for sk, ok in cam_map.items():
+        vc = int(meta_scalar(ep_meta[f"videos/{sk}/chunk_index"]))
+        vf = int(meta_scalar(ep_meta[f"videos/{sk}/file_index"]))
+        from_ts = float(meta_scalar(ep_meta[f"videos/{sk}/from_timestamp"]))
+        vpath = src_root / "videos" / sk / f"chunk-{vc:03d}" / f"file-{vf:03d}.mp4"
+        frames = decode_video(vpath)
+        off = int(round(from_ts * fps))
+        frames = frames[off : off + n]
+        if len(frames) != n:
+            raise ValueError(
+                f"ep{ep}: {sk} yielded {len(frames)} frames for {n} state rows "
+                f"(video {vpath} inconsistent)."
+            )
+        images[ok] = frames
 
     runs = segment_runs(list(sub))
     ep_frames = []
@@ -384,11 +428,17 @@ def main():
 
     eps = (args.eps_pos, args.eps_ori, args.eps_grip)
     idxs = (eef_idx, grip_idx, subtask_idx)
+    # Read all per-frame state once from the data parquet (no video decode), then
+    # decode each episode's video in a single sequential pass below.
+    raw_states = load_raw_states(src_root)
     skipped = 0
     for ep in range(src.num_episodes):
         try:
+            if ep not in raw_states:
+                raise ValueError("no state rows in the data parquet")
             ep_frames, n_raw, n_subs = build_episode_frames(
-                src, ep, cam_map, idxs, eps
+                src_root, src.meta.episodes[ep], ep, raw_states[ep],
+                cam_map, idxs, eps, src.fps,
             )
         except Exception as e:
             # One corrupt/missing video (e.g. a dropped recording) shouldn't kill

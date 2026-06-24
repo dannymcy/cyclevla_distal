@@ -36,9 +36,19 @@ point), then `/home/kai/Projects/cyclevla_code/PI.md` (training steps).
    the master-slave pairing intact. JointCtrl homing was removed (it breaks the
    pairing). Needs firmware `≥ V1.7-4`; the right set (`S-V1.7-3`) is too old —
    hence the left default above.*
-3. **Verify teleop data capture.** Confirm teleoperation saves correctly to
-   `/home/kai/Projects/cyclevla_distal/data`. Check the record command and
-   whether that path is gitignored. [ ]
+3. **Verify teleop data capture.** [done]
+   *`pixi run record` runs the local `distal/hardware/record.py` (not stock
+   `lerobot-record`). It saves a LeRobot v3.0 dataset to
+   `data/cyclevla/real_robot_decomposed_progress` (`data/` is gitignored). The
+   custom loop: homes the active set and waits for SPACE before the first episode
+   and between episodes (→ saves, ← discards+re-records, Esc stops+finalizes);
+   prints a "saved & encoded" confirmation per episode. The dataset uses a
+   stable, unstamped `repo_id` and auto create-or-resumes, so reruns append into
+   one dataset (`num_episodes` = episodes to add this session) that
+   compute_norm_stats resolves directly. Videos are one mp4 per episode per
+   camera (`video_files_size_in_mb` set tiny for debuggability); the data parquet
+   stays concatenated. NOTE: set `single_task` to the real instruction before
+   collecting real data — it is baked into every frame.*
 
 ## DOs (Very Important)
 

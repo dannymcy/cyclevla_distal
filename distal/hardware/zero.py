@@ -103,7 +103,7 @@ def parse_firmware(fw: str | None) -> tuple[int, int, int] | None:
     m = re.search(r"V(\d+)\.(\d+)-(\d+)", fw)
     if not m:
         return None
-    return tuple(int(g) for g in m.groups())  # type: ignore[return-value]
+    return tuple(int(g) for g in m.groups())  # ty: ignore[invalid-return-type]
 
 
 def read_firmware(arm) -> str | None:

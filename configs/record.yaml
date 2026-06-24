@@ -23,9 +23,14 @@ dataset:
   repo_id: cyclevla/real_robot_decomposed_progress
   single_task: Test  # set to the task's language instruction before recording
   fps: 20
-  episode_time_s: 600
+  episode_time_s: 600  # upper bound per episode; press -> to end+save early
+  # reset_time_s is UNUSED by distal/hardware/record.py: instead of a blind timed
+  # reset window, the arm is homed after each episode and the next one starts only
+  # when you press SPACE. Kept because DatasetRecordConfig still defines the field.
   reset_time_s: 15
-  num_episodes: 50
+  # Episodes to ADD this session. record.py auto-resumes an existing dataset, so
+  # rerunning `pixi run record` appends another `num_episodes` into the same one.
+  num_episodes: 100
   streaming_encoding: true
   encoder_threads: 5
   vcodec: auto

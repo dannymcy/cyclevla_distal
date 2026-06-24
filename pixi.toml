@@ -116,7 +116,10 @@ description = "Record demonstrations via teleop"
 # the same repo_id (openpi resolves $HF_LEROBOT_HOME/<repo_id> with no root override).
 # Scoped to `record` so base-policy train/eval keep their normal HF cache.
 env = { HF_LEROBOT_HOME = "/home/kai/Projects/cyclevla_distal/data" }
-cmd = "lerobot-record --config_path=configs/record.yaml"
+# Local entry point (distal/hardware/record.py), not stock `lerobot-record`: it
+# homes the arm between episodes, gates the next episode on SPACE, and keeps a
+# stable, resumable dataset at data/<repo_id>. See that module's docstring.
+cmd = "python distal/hardware/record.py --config_path=configs/record.yaml"
 
 [tasks.rollout]
 description = "Rollout trained policy on physical arm"

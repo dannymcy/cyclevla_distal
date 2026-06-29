@@ -156,7 +156,9 @@ def report_arm_state(iface: str, arm) -> None:
         )
 
 
-def home_master_slave(iface: str, arm, gripper_angle: int | None) -> None:
+def home_master_slave(
+    iface: str, arm, gripper_angle: int | None, restore: bool = True
+) -> None:
     """Home a master-slave teleop pair using the firmware-native return-to-zero.
 
     ReqMasterArmMoveToHome (CAN 0x191, firmware >= V1.7-4) homes the pair in-mode
@@ -164,6 +166,13 @@ def home_master_slave(iface: str, arm, gripper_angle: int | None) -> None:
     restores master-slave mode so teleoperation resumes cleanly. Sending 0x191 to
     the master homes both via the linkage; on the slave it is a no-op (the
     diagnostic print above makes that visible).
+
+    `restore` (default True) controls the final `ReqMasterArmMoveToHome(0)` that
+    RE-ENABLES the master-slave linkage. record/teleop want that so the operator can
+    teleoperate again. AUTONOMOUS EVAL passes restore=False: re-linking would make
+    the leader keep driving the follower during the rollout (the "leader also moves"
+    bug); skipping it leaves the pair homed but unlinked, so the follower can then be
+    put in CAN control (set_eef_mode) and driven ALONE via EndPoseCtrl.
 
     The 0x191 home moves the 6 joints only, not the gripper. When `gripper_angle`
     is not None we send a direct GripperCtrl afterwards: the gripper is outside the
@@ -176,9 +185,12 @@ def home_master_slave(iface: str, arm, gripper_angle: int | None) -> None:
     if gripper_angle is not None:
         arm.GripperCtrl(gripper_angle, 1000, 0x01, 0)
         print(f"  {iface}: commanded gripper to {gripper_angle} (0.001mm)")
-    # Restore master-slave mode so the operator can teleoperate again immediately.
-    arm.ReqMasterArmMoveToHome(0)
-    print(f"  {iface}: restored master-slave mode (0x191 mode=0)")
+    if restore:
+        # Restore master-slave mode so the operator can teleoperate again.
+        arm.ReqMasterArmMoveToHome(0)
+        print(f"  {iface}: restored master-slave mode (0x191 mode=0)")
+    else:
+        print(f"  {iface}: left UNLINKED (no 0x191 mode=0) — autonomous eval.")
 
 
 def main():

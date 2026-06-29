@@ -1,0 +1,57 @@
+# Real-robot CycleVLA eval config (draccus -> distal.hardware.real_eval_common.RealEvalConfig).
+# Used by both entry points:
+#   pixi run python -m distal.hardware.run_real_eval_openpi_transit  --config_path=configs/real_eval.yaml
+#   pixi run python -m distal.hardware.run_real_eval_openpi_cyclevla --config_path=configs/real_eval.yaml
+# The 9-D PI0.5 policy is served separately by the openpi WebSocket server
+# (cyclevla_code/openpi; serve_policy.py with config pi05_libero_cyclevla). Start
+# that FIRST — these scripts block until it is reachable on host:port.
+#
+# Episode loop (mirrors `pixi run record`): the arm homes to zero, then
+#   SPACE = start the episode   ->  = stop + save + print "saved & encoded"
+#   <-    = discard + re-record  Esc = end the session
+# After each saved episode the arm re-homes; press SPACE to run the next one.
+# See distal/hardware/REAL_EVAL.md for the full workflow.
+
+# ---- policy server ----
+host: 0.0.0.0
+port: 8000
+num_open_loop_steps: 5      # actions executed before requerying the server (<=10)
+
+# ---- task / robot ----
+# MUST be one of the keys in distal/hardware/subtasks.py (drives the per-subtask
+# prompts the policy was trained on).
+single_task: pick up the black bowl and place it on the plate
+sides: [left]               # active arm set; sides[0] is driven (left set is the default rig)
+fps: 20                     # control loop rate (matches the training/recording fps)
+max_steps: 5000              # hard per-episode step budget
+num_steps_wait: 0           # settle steps before the first action (0 on the real arm)
+num_episodes: 30             # episodes to run this session (ENTER between episodes)
+home: true                  # firmware home (master-slave 0x191) before the run
+restore_teleop_on_exit: true
+
+# ---- EEF control / safety (start conservative, raise once tracking looks good) ----
+eef_speed_rate: 30          # MotionCtrl_2 speed % (0-100)
+delta_base: chunk           # "chunk" = accumulate Δ from the EEF read at each requery; "live" = Δ on the live EEF
+max_pos_step: 0.05          # per-step ΔEEF position clamp (m); <=0 disables
+max_rot_step: 1.0          # per-step ΔEEF rotation clamp (rad); 1.0 verified — 0.3 over-clips the policy's rotation deltas; <=0 disables
+invert_gripper: false       # flip gripper polarity vs sim — VERIFY open/close on the first rollout
+gripper_open: 7.0           # obs-unit gripper value at full open (used only when invert_gripper)
+no_arm: false               # diagnostic: cameras + server only, never command the arm (USB-CAN isolation)
+camera_fps: null            # override RealSense fps (e.g. 15) to cut USB bandwidth; null keeps 30
+
+# ---- output (gitignored: data/ is in .gitignore) ----
+video_dir: data/rollouts
+log_dir: data/rollouts/logs
+
+# ---- dry run (no arm): build a synthetic obs, query the server, print the action ----
+dry_run: false
+
+# ---- cyclevla-only (ignored by the transit script) ----
+progress_threshold: 0.90
+max_subtask_retries: 3
+vlm_model: gpt-5.5
+vlm_temperature: 1.0
+mbr_num_seeds: 8
+mbr_distance_metric: l2
+mbr_use_failed_repulsion: false
+mbr_vanilla: false

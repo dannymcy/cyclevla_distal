@@ -53,6 +53,12 @@ lerobot-doctor = { git = "https://github.com/reeceomahoney/lerobot-doctor", bran
 lerobot_robot_piper = { path = "lerobot_robot_piper", editable = true }
 lerobot_teleoperator_piper = { path = "lerobot_teleoperator_piper", editable = true }
 pynput = ">=1.7"
+# Real-robot eval (distal/hardware/run_real_eval_openpi_*.py): `msgpack` is the
+# only hard dep of the openpi websocket client we import (its msgpack_numpy
+# submodule needs just msgpack + numpy; we import openpi_client from source via
+# OPENPI_CLIENT_SRC to avoid its numpy<2 pin). `openai` is for the cyclevla VLM.
+msgpack = ">=1.0.5"
+openai = ">=1.40"
 
 [target.linux-64.pypi-dependencies]
 nvidia-npp-cu12 = ">=12,<13"
@@ -124,6 +130,18 @@ cmd = "python distal/hardware/record.py --config_path=configs/record.yaml"
 [tasks.rollout]
 description = "Rollout trained policy on physical arm"
 cmd = "lerobot-rollout --config_path=configs/rollout.yaml"
+
+[tasks.real-eval-transit]
+description = "Real-robot CycleVLA transit-only eval (needs the openpi policy server up)"
+cmd = "python -m distal.hardware.run_real_eval_openpi_transit --config_path=configs/real_eval.yaml"
+
+[tasks.real-eval-cyclevla]
+description = "Real-robot CycleVLA full-method eval (VLM + MBR + joint-replay backtrack)"
+cmd = "python -m distal.hardware.run_real_eval_openpi_cyclevla --config_path=configs/real_eval.yaml"
+
+[tasks.camera-check]
+description = "Camera-only soak: read both cameras at fps, no server/arm (isolation test)"
+cmd = "python -m distal.hardware.camera_check"
 
 [tasks.sky]
 description = "Launch on Vast via SkyPilot, or sky exec on existing cluster_id"

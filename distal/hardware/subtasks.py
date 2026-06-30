@@ -20,49 +20,49 @@ each episode correctly via its stored high-level instruction.
 IMPORTANT conventions (mirroring the sim Stage-3 builder
 `LIBERO_Decomposed_Progress_dataset_builder.py`):
   * Subtask strings are lowercase imperative phrases.
-  * A subtask that actuates the gripper MUST contain the word "gripper"
-    ("close the gripper ...", "open the gripper ..."). The offline tail-
-    oversampling keys off this word: gripper subtasks repeat the last frame x8,
-    non-gripper subtasks repeat the last 3 frames x4. Keep the wording when you
-    revise these.
+  * Every subtask is phrased around "the gripper" — both the actuation steps
+    ("close the gripper ...", "open the gripper ...") and the motion steps
+    ("move the gripper above ..."). This matches sim, where all subtasks contain
+    the word "gripper". The offline tail-oversampling in
+    `convert_to_cyclevla.py` keys off this word, so with this wording EVERY
+    subtask takes the gripper branch: repeat the last frame x8.
 
-These three tasks (4 / 8 / 8 subtasks) are PLACEHOLDERS chosen only to exercise
-the pipeline end-to-end and to cover the gripper / non-gripper oversample branches.
-Replace the instructions and subtasks with the real ones before collecting data;
-the rest of the pipeline is agnostic to the count and wording.
+These three tasks (4 / 8 / 8 subtasks) are the real-robot tasks. The rest of the
+pipeline is agnostic to the count and wording; lookup is keyed by the high-level
+instruction (see below).
 """
 
 # High-level instruction -> ordered subtask strings. The high-level key is what
 # you put in `record.yaml single_task` while teleoperating that task.
 TASKS: dict[str, list[str]] = {
-    # 4 subtasks — simple reach / grasp / transport / release.
-    "pick up the black bowl and place it on the plate": [
-        "reach for the black bowl",
-        "close the gripper to grasp the black bowl",
-        "move the black bowl over the plate",
-        "open the gripper to release the black bowl",
-    ],
-    # 8 subtasks — two-stage manipulation.
-    "put the red mug on the shelf and open the cabinet drawer": [
-        "reach for the red mug",
-        "close the gripper to grasp the red mug",
-        "lift the red mug off the table",
-        "move the red mug onto the shelf",
-        "open the gripper to release the red mug",
-        "reach for the cabinet drawer handle",
-        "close the gripper to grasp the cabinet drawer handle",
-        "pull the cabinet drawer open",
+    # 4 subtasks — single object placement.
+    "hang the green teapot on the mug holder": [
+        "move the gripper above the green teapot",
+        "close the gripper to grasp the green teapot",
+        "move the gripper toward the middle peg of the mug holder while holding the green teapot",
+        "open the gripper to hang the green teapot on the mug holder",
     ],
     # 8 subtasks — sequential placement of two objects.
-    "put the bread on the plate and move the butter knife beside it": [
-        "reach for the bread",
-        "close the gripper to grasp the bread",
-        "lift the bread off the table",
-        "move the bread over the plate",
-        "open the gripper to release the bread onto the plate",
-        "reach for the butter knife",
-        "close the gripper to grasp the butter knife",
-        "move the butter knife beside the plate",
+    "place the grape on the red plate and the apple on the green plate": [
+        "move the gripper above the grape",
+        "close the gripper to grasp the grape",
+        "move the gripper above the red plate while holding the grape",
+        "open the gripper to release the grape",
+        "move the gripper above the apple",
+        "close the gripper to grasp the apple",
+        "move the gripper above the green plate while holding the apple",
+        "open the gripper to release the apple",
+    ],
+    # 8 subtasks — sequential placement of two objects.
+    "place the can of corn on the pan and the milk carton in the pot": [
+        "move the gripper above the can of corn",
+        "close the gripper to grasp the can of corn",
+        "move the gripper above the pan while holding the can of corn",
+        "open the gripper to release the can of corn",
+        "move the gripper above the milk carton",
+        "close the gripper to grasp the milk carton",
+        "move the gripper above the pot while holding the milk carton",
+        "open the gripper to release the milk carton",
     ],
 }
 

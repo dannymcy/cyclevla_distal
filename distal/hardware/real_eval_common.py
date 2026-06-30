@@ -607,7 +607,7 @@ class RealEvalConfig:
 
     # ---- task / robot ----
     # single_task MUST be a key in distal/hardware/subtasks.py.
-    single_task: str = "pick up the black bowl and place it on the plate"
+    single_task: str = "hang the green teapot on the mug holder"
     sides: list[str] = field(default_factory=lambda: ["left"])  # sides[0] driven
     fps: int = 20                         # control loop rate (matches training fps)
     max_steps: int = 600                  # hard per-episode step budget

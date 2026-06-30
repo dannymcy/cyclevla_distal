@@ -26,7 +26,7 @@ dataset:
   # ordered subtask list). During teleop, press 'y' to mark the end of each subtask
   # (K subtasks -> K-1 presses); the per-frame `subtask_index` drives the offline
   # decomposition in distal/hardware/convert_to_cyclevla.py. Change this per task.
-  single_task: pick up the black bowl and place it on the plate
+  single_task: hang the green teapot on the mug holder
   fps: 20
   episode_time_s: 600  # upper bound per episode; press -> to end+save early
   # reset_time_s is UNUSED by distal/hardware/record.py: instead of a blind timed

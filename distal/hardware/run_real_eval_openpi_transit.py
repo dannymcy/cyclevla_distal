@@ -86,7 +86,7 @@ def run_episode_transit(cfg, robot, arm, client, states, events, writer):
             if events["exit_early"]:
                 break
             logger.info(f"Starting subtask {subtask_idx}: {current_state}")
-            stop_confirm = SignalConfirmer(threshold=0.95)
+            stop_confirm = SignalConfirmer(threshold=0.5)
             queue: deque = deque()
             pending = False  # a background fetch is in flight for this subtask
             cmd_eef = None  # accumulating command pose for delta_base == "chunk"

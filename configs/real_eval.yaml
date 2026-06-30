@@ -32,8 +32,8 @@ restore_teleop_on_exit: true
 # ---- EEF control / safety (start conservative, raise once tracking looks good) ----
 eef_speed_rate: 30          # MotionCtrl_2 speed % (0-100)
 delta_base: chunk           # "chunk" = accumulate Δ from the EEF read at each requery; "live" = Δ on the live EEF
-max_pos_step: 0.05          # per-step ΔEEF position clamp (m); <=0 disables
-max_rot_step: 1.0          # per-step ΔEEF rotation clamp (rad); 1.0 verified — 0.3 over-clips the policy's rotation deltas; <=0 disables
+max_pos_step: 0.10          # per-step ΔEEF position clamp (m); <=0 disables
+max_rot_step: 2.0          # per-step ΔEEF rotation clamp (rad); 1.0 verified — 0.3 over-clips the policy's rotation deltas; <=0 disables
 invert_gripper: false       # flip gripper polarity vs sim — VERIFY open/close on the first rollout
 gripper_open: 7.0           # obs-unit gripper value at full open (used only when invert_gripper)
 no_arm: false               # diagnostic: cameras + server only, never command the arm (USB-CAN isolation)

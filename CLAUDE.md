@@ -101,7 +101,42 @@ point), then `/home/kai/Projects/cyclevla_code/PI.md` (training steps).
    norm-stats — back up the sim asset + use a distinct train run name. (3) Gripper
    open/close polarity vs sim unverified (norm stats absorb scale; confirm at eval).*
 
-5. **Write evaluation script and launch.**
+5. **Write evaluation scripts and launch on the real robot.** [done — transit
+   baseline + cyclevla full method both run end-to-end]
+   *Two distal-side clients to the openpi WebSocket server (ZERO `cyclevla_code`
+   edits), mirroring `experiments/robot/libero/run_libero_eval_openpi_{transit,
+   cyclevla}.py`:*
+   - *`distal/hardware/run_real_eval_openpi_transit.py` — drive each subtask, advance
+     on the robust stop-signal confirmation.*
+   - *`distal/hardware/run_real_eval_openpi_cyclevla.py` — two-phase 90% VLM check →
+     `transit`/`backtrack` (joint-replay rewind + MBR re-decode); needs
+     `OPENAI_API_KEY` in `.env`.*
+   - *`distal/hardware/real_eval_common.py` — shared client: builds the 8-D EEF state
+     + two UNROTATED 224 images, queries the server, applies 9-D `[ΔEEF,grip,s_t,p_t]`
+     via Cartesian `EndPoseCtrl` (`target=current+Δ`, additive-euler — exact inverse
+     of `convert_to_cyclevla`). `configs/real_eval.yaml` + `pixi run real-eval-{transit,
+     cyclevla}`; `pixi run camera-check` is the camera diagnostic.*
+   - *Run from `cyclevla_code/openpi` first: `serve_openpi_cyclevla.sh` (CKPT_DIR =
+     `.../CycleVLA_real_robot_decomposed_progress_pi05_A100/<step>`). Full operator
+     guide: `distal/hardware/REAL_EVAL.md`.*
+
+   **HARD-WON GOTCHAS (all resolved):**
+   - ***Stream rollout frames to disk*** *(`RolloutVideoWriter`), NEVER accumulate in
+     RAM — holding full-res frames starved the RealSense read thread → both cameras
+     `status=False`. (Wrist cam is on a USB-2 link; prefer USB3 / `camera_fps:15`.)*
+   - ***Control mode, not teleop.*** *Eval homes the follower via `ModeCtrl(CAN)+
+     JointCtrl(0)` and drives `EndPoseCtrl` — it must NOT call the 0x191 master-slave
+     home (that re-engages teleop; record keeps it). `report_ctrl_mode` logs
+     `CAN-control (0x01)` to confirm. **POWER OFF the leader arm** during eval (the
+     `0xFC` slave linkage can't be software-disabled without a power-cycle, so a
+     powered leader fights the policy); power-cycle the follower before `record` again.*
+   - ***`max_rot_step ≈ 1.0`*** *(default raised from 0.3, which over-clipped the
+     policy's rx/rz rotation deltas).*
+   - *Console+file logging; per-step action print; record.py-style SPACE/→/←/Esc loop.*
+
+   **Norm-stats name-collision caveat still applies** (see TODO 4): real
+   `compute_norm_stats` overwrites the sim asset (`asset_id=repo_id`); back up the sim
+   asset + use a distinct train run name.
 
 ## DOs (Very Important)
 

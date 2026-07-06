@@ -53,6 +53,7 @@ from scipy.spatial.transform import Rotation as R
 from distal.hardware import subtasks
 from distal.hardware.real_eval_common import (
     CameraReadError,
+    GripperResolver,
     PolicyClient,
     RealEvalConfig,
     RolloutVideoWriter,
@@ -72,7 +73,6 @@ from distal.hardware.real_eval_common import (
     read_observation,
     reconnect_cameras,
     report_ctrl_mode,
-    resolve_gripper_command,
     run_dry_run,
     set_eef_mode,
     setup_logging,
@@ -384,6 +384,9 @@ def run_episode_cyclevla(cfg, robot, arm, client, states, vlm, events, writer):
     action_queue: deque = deque(maxlen=cfg.num_open_loop_steps)
 
     t = 0
+    # One stateful gripper resolver for the whole episode (hysteresis latch persists across
+    # subtasks/backtracks); arm is homed open so seed the latch open.
+    gripper_resolver = GripperResolver(cfg)
     current_state = states[0]
     subtask_hist, exe_type_hist = [current_state], ["init"]
 
@@ -452,7 +455,9 @@ def run_episode_cyclevla(cfg, robot, arm, client, states, vlm, events, writer):
             cmd_eef = apply_delta(cmd_eef, delta6)
             target = cmd_eef
         if not cfg.no_arm:
-            command_eef(arm, target, resolve_gripper_command(cfg, g))
+            command_eef(
+                arm, target, gripper_resolver.resolve(g), effort=cfg.gripper_effort
+            )
         t += 1
         # Pace the control loop before any (slow) VLM call below.
         precise_sleep(max(0.0, period - (time.perf_counter() - loop_start)))

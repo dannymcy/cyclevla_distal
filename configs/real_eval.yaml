@@ -32,10 +32,31 @@ restore_teleop_on_exit: true
 # ---- EEF control / safety (start conservative, raise once tracking looks good) ----
 eef_speed_rate: 30          # MotionCtrl_2 speed % (0-100)
 delta_base: chunk           # "chunk" = accumulate Δ from the EEF read at each requery; "live" = Δ on the live EEF
-max_pos_step: 0.10          # per-step ΔEEF position clamp (m); <=0 disables
-max_rot_step: 2.0          # per-step ΔEEF rotation clamp (rad); 1.0 verified — 0.3 over-clips the policy's rotation deltas; <=0 disables
+max_pos_step: 0.30          # per-step ΔEEF position clamp (m); <=0 disables
+max_rot_step: 5.0          # per-step ΔEEF rotation clamp (rad); 1.0 verified — 0.3 over-clips the policy's rotation deltas; <=0 disables
 invert_gripper: false       # flip gripper polarity vs sim — VERIFY open/close on the first rollout
-gripper_open: 7.0           # obs-unit gripper value at full open (used only when invert_gripper)
+# Measured training-data gripper obs range: bimodal — closed/grasp ≈ 4.3, full open ≈ 9.8
+# (valley ≈ 7.0). Policy outputs absolute stroke in this space; no ±1 command.
+gripper_open: 10.0          # obs-unit FULL OPEN (data ~9.8). Hysteresis open target (not used by binarize)
+gripper_closed: 0.0         # CLOSE target (0 = firm full close onto object); ignored in continuous
+gripper_close_threshold: 8.25  # binarize FIRM-CLOSE trigger: g<=this -> full close, g>this -> pos-control; IGNORED in continuous & hysteresis
+# --- gripper mode selection (precedence: hysteresis > binarize > raw) ---
+# gripper_binarize false = CONTINUOUS/pos-control: command the policy's raw stroke (exact
+# training state, close ~4.3→43mm / open ~9.8→98mm). true = FIRM-CLOSE-ONLY hybrid: below
+# gripper_close_threshold → full close, above → normal pos-control (opening reaches ~9.8).
+gripper_binarize: true
+# gripper_hysteresis true OVERRIDES the above with a dual-threshold latch (robust, canonical
+# — mirrors LIBERO binarize_gripper_actions): OPEN when g>=gripper_open_above, CLOSE when
+# g<=gripper_close_below, else HOLD. Non-brittle band (validated: 99.2% match, 0 drift);
+# prefer this over a single threshold for crisp open/close without chatter.
+gripper_hysteresis: false
+gripper_open_above: 9.5     # hysteresis: latch OPEN at/above this (open cluster ~9.8)
+gripper_close_below: 8.25    # hysteresis: latch CLOSED at/below this (close cluster ~4.3)
+# Reset/home open width (obs units), DECOUPLED from gripper_open so the start pose and the
+# per-step open target tune separately. 10.0 = training full-open (~9.8) so the arm STARTS
+# in the open state the policy expects (policy immediately takes over during the episode).
+gripper_reset_open: 10.0
+gripper_effort: 3000        # GripperCtrl effort (0.001 N·m, 0-5000); firm grip
 no_arm: false               # diagnostic: cameras + server only, never command the arm (USB-CAN isolation)
 camera_fps: null            # override RealSense fps (e.g. 15) to cut USB bandwidth; null keeps 30
 

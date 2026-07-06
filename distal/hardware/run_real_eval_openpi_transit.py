@@ -32,6 +32,7 @@ from distal.hardware import subtasks
 from distal.hardware.real_eval_common import (
     AsyncFetch,
     CameraReadError,
+    GripperResolver,
     PolicyClient,
     RealEvalConfig,
     RolloutVideoWriter,
@@ -48,7 +49,6 @@ from distal.hardware.real_eval_common import (
     read_observation,
     reconnect_cameras,
     report_ctrl_mode,
-    resolve_gripper_command,
     run_dry_run,
     set_eef_mode,
     setup_logging,
@@ -80,6 +80,9 @@ def run_episode_transit(cfg, robot, arm, client, states, events, writer):
     period = 1.0 / cfg.fps
     fetch = AsyncFetch(client, cfg.num_open_loop_steps)
     t = 0  # global step counter (bounds the whole episode)
+    # One stateful gripper resolver per episode (hysteresis latch persists across
+    # subtasks); the arm is homed open, so seed the latch open.
+    gripper_resolver = GripperResolver(cfg)
 
     try:
         for subtask_idx, current_state in enumerate(states):
@@ -143,7 +146,10 @@ def run_episode_transit(cfg, robot, arm, client, states, events, writer):
                         cmd_eef = apply_delta(cmd_eef, delta6)
                         target = cmd_eef
                     if not cfg.no_arm:
-                        command_eef(arm, target, resolve_gripper_command(cfg, g))
+                        command_eef(
+                            arm, target, gripper_resolver.resolve(g),
+                            effort=cfg.gripper_effort,
+                        )
                     t += 1
                     t_sub += 1
                     if stop_confirm.update(stop_signal):

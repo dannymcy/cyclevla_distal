@@ -106,6 +106,11 @@ MOVE_MODE_J = 0x01  # joint interpolation (MOVE_J)
 # piper.py send_action (action * 1e4 -> GripperCtrl units).
 M_TO_ENDPOSE = 1e6  # meters -> 0.001 mm
 GRIPPER_SCALE = 1e4  # obs/action gripper unit -> GripperCtrl units
+# GripperCtrl effort (0.001 N·m; SDK range 0-5000 = 0-5 N·m). Raised from the old
+# hardcoded 1000 (1 N·m), which under-grips (partial close on objects) and
+# under-opens on reset. Config `gripper_effort` overrides this per-run. Defined here
+# (above command_eef/command_joints) so it is in scope for their default args.
+GRIPPER_EFFORT = 3000
 
 
 def wrap_angle(a):
@@ -323,7 +328,9 @@ def set_joint_mode(arm, speed_rate):
     arm.MotionCtrl_2(CTRL_MODE_CAN, MOVE_MODE_J, int(speed_rate), 0x00)
 
 
-def command_eef(arm, target_eef, gripper, gripper_clip=(0, 90000)):
+def command_eef(
+    arm, target_eef, gripper, gripper_clip=(0, 100000), effort=GRIPPER_EFFORT
+):
     """Command an absolute EEF pose (m / euler rad) + gripper.
 
     Inverts piper.py's obs scaling: m -> 0.001mm (*1e6), rad -> deg -> 0.001deg
@@ -338,10 +345,12 @@ def command_eef(arm, target_eef, gripper, gripper_clip=(0, 90000)):
     arm.EndPoseCtrl(x, y, z, rx, ry, rz)
     g_units = int(round(float(gripper) * GRIPPER_SCALE))
     g_units = max(gripper_clip[0], min(gripper_clip[1], g_units))
-    arm.GripperCtrl(g_units, 1000, 0x01, 0)
+    arm.GripperCtrl(g_units, effort, 0x01, 0)
 
 
-def command_joints(arm, joints_deg, gripper=None, gripper_clip=(0, 90000)):
+def command_joints(
+    arm, joints_deg, gripper=None, gripper_clip=(0, 100000), effort=GRIPPER_EFFORT
+):
     """Command 6 joint angles (deg -> SDK 0.001deg), optionally the gripper too.
 
     Mirrors piper.py send_action's JointCtrl scaling (no action_bias applied —
@@ -351,7 +360,7 @@ def command_joints(arm, joints_deg, gripper=None, gripper_clip=(0, 90000)):
     if gripper is not None:
         g_units = int(round(float(gripper) * GRIPPER_SCALE))
         g_units = max(gripper_clip[0], min(gripper_clip[1], g_units))
-        arm.GripperCtrl(g_units, 1000, 0x01, 0)
+        arm.GripperCtrl(g_units, effort, 0x01, 0)
 
 
 def restore_teleop(arm):
@@ -624,8 +633,36 @@ class RealEvalConfig:
     # per-step ΔEEF rot clamp (rad); 1.0 verified — 0.3 over-clips the policy's
     # rotation deltas (saturates rx/rz) → poor wrist motion. <=0 disables.
     max_rot_step: float = 1.0
-    invert_gripper: bool = False          # flip gripper polarity (verify at first run)
-    gripper_open: float = 7.0             # obs-unit gripper value at full open (invert)
+    invert_gripper: bool = False  # flip gripper polarity (verify at first run)
+    # Measured gripper obs range in the training data (data/cyclevla/
+    # libero_decomposed_progress, confirmed by norm_stats.json): bimodal — CLOSED/grasp
+    # ≈ 4.3, FULLY OPEN ≈ 9.8, valley at ~7.0. The policy outputs an absolute stroke
+    # that GripperCtrl drives the gripper TO (there is no ±1 command).
+    gripper_open: float = 10.0  # obs FULL OPEN (~9.8); hysteresis open target
+    gripper_closed: float = 0.0  # obs CLOSE target (0 = firm full close)
+    # binarize close trigger: g <= this → full close, g > this → pos-control.
+    # Sits in the antimode (~7.0) between the close (~4.3) / open (~9.8) clusters.
+    # Hysteresis uses gripper_open_above/gripper_close_below instead.
+    gripper_close_threshold: float = 7.0
+    # binarize = FIRM-CLOSE-ONLY hybrid: below gripper_close_threshold → full close
+    # (gripper_closed); above → normal pos-control (raw stroke, opening reaches ~9.8).
+    gripper_binarize: bool = True
+    # Third mode (precedence over gripper_binarize): dual-threshold HYSTERESIS.
+    # Latch OPEN when g >= gripper_open_above, CLOSED when g <= gripper_close_below,
+    # else HOLD the last state. Mirrors LIBERO's binarize_gripper_actions (threshold at
+    # the extremes, carry state between): robust and non-brittle (a hold-band, not one
+    # point) — unlike a prev-vs-current delta, which drifts on gradual reopens.
+    # Precedence: hysteresis > binarize > raw. See GripperResolver.
+    gripper_hysteresis: bool = False
+    gripper_open_above: float = 8.5  # hyst: latch OPEN at/above (~9.8 cluster)
+    gripper_close_below: float = 5.5  # hyst: latch CLOSED at/below (~4.3 cluster)
+    # Reset/home open width (obs), decoupled from gripper_open so the home pose and the
+    # per-step open target tune separately. Training full-open (~9.8) so the arm STARTS
+    # open (the state the policy expects); see home_robot.
+    gripper_reset_open: float = 10.0
+    # GripperCtrl effort (0.001 N·m, 0-5000); raised from the old 1000 (1 N·m) which
+    # under-grips / under-opens. See GRIPPER_EFFORT.
+    gripper_effort: int = 3000
     # Diagnostic: run cameras + server queries but NEVER command the arm (no
     # set_eef_mode / EndPoseCtrl / backtrack). Isolates whether the arm's USB-CAN
     # writes are what drops the RealSense cameras.
@@ -659,12 +696,57 @@ def active_side(cfg: RealEvalConfig) -> str:
 
 
 def resolve_gripper_command(cfg: RealEvalConfig, gripper_value: float) -> float:
-    """Apply the optional gripper polarity flip. Sim vs real open/close sign is
-    unverified (norm stats absorb scale); --invert-gripper flips it as
-    g_cmd = gripper_open - g."""
+    """Map the policy's raw gripper output to a GripperCtrl command (obs units).
+
+    Two optional transforms, applied in order so they compose:
+      1. invert (--invert-gripper): flip open/close polarity vs sim as
+         g = gripper_open - g. Sim vs real sign is unverified (norm stats absorb
+         scale); off by default.
+      2. binarize (--gripper-binarize): FIRM-CLOSE-ONLY hybrid. Below the close
+         threshold (policy clearly closing) snap to a full close (gripper_closed);
+         ABOVE it fall through to normal pos-control (the raw stroke). Pos-control alone
+         only reaches the ~4.3 grasp-width close, so this forces a firm full grasp while
+         opening stays faithful (pos-control reaches ~9.8 ≈ full on its own). Threshold
+         sits in the ~7.0 valley between the close (~4.3) / open (~9.8) clusters."""
+    g = float(gripper_value)
     if cfg.invert_gripper:
-        return cfg.gripper_open - float(gripper_value)
-    return float(gripper_value)
+        g = cfg.gripper_open - g
+    if cfg.gripper_binarize and g <= cfg.gripper_close_threshold:
+        g = cfg.gripper_closed  # firm full close; above threshold → raw pos-control
+    return g
+
+
+class GripperResolver:
+    """Per-episode, stateful gripper open/close resolver — the single choke point both
+    eval loops call each step. Three modes (precedence hysteresis > binarize > raw):
+
+      - raw / threshold: delegate to the stateless resolve_gripper_command (unchanged).
+      - hysteresis (cfg.gripper_hysteresis): latch OPEN when g >= gripper_open_above,
+        CLOSED when g <= gripper_close_below, else HOLD the latched state, then command
+        gripper_open / gripper_closed. A hold-band (not a single midpoint) keyed off the
+        clean bimodal absolute signal — robust and drift-free (validated on eval logs:
+        99.2% agreement with the absolute signal, 0% drift), unlike a prev-vs-current
+        delta which sticks closed on gradual reopens.
+
+    Seed `open` per episode: the arm is homed open, so the latch starts open."""
+
+    def __init__(self, cfg: RealEvalConfig, seed_open: bool = True):
+        self.cfg = cfg
+        self.open = seed_open
+
+    def resolve(self, gripper_value: float) -> float:
+        cfg = self.cfg
+        if not cfg.gripper_hysteresis:
+            return resolve_gripper_command(cfg, gripper_value)
+        g = float(gripper_value)
+        if cfg.invert_gripper:
+            g = cfg.gripper_open - g
+        if g >= cfg.gripper_open_above:
+            self.open = True
+        elif g <= cfg.gripper_close_below:
+            self.open = False
+        # else: within the band → hold the latched state
+        return cfg.gripper_open if self.open else cfg.gripper_closed
 
 
 def setup_logging(cfg: RealEvalConfig, variant: str):
@@ -783,11 +865,16 @@ def read_observation(robot, retries=3, reconnect=True):
     raise CameraReadError(f"Camera read failed after {retries} attempts: {last_err}")
 
 
-# Gripper full-open in GripperCtrl units (0.001 mm); 70 mm, per zero.py.
-HOME_GRIPPER_OPEN = 70_000
+# Fallback gripper open on reset, in GripperCtrl units (0.001 mm). home_robot passes
+# cfg.gripper_open*GRIPPER_SCALE instead (single source of truth) so reset opens as wide
+# as the training data's full-open (~9.8 → 98000), not the old conservative 70 mm.
+HOME_GRIPPER_OPEN = 100_000
 
 
-def home_follower(arm, speed, repeats=5, settle=0.5, open_gripper=True):
+def home_follower(
+    arm, speed, repeats=5, settle=0.5, open_gripper=True, effort=GRIPPER_EFFORT,
+    open_units=HOME_GRIPPER_OPEN,
+):
     """Home ONE arm to joint-zero in CONTROL mode (NOT teleop / 0x191).
 
     Mirrors the rollout / user homing snippet: ModeCtrl(CAN, MOVE_J) then repeated
@@ -800,7 +887,7 @@ def home_follower(arm, speed, repeats=5, settle=0.5, open_gripper=True):
     for _ in range(repeats):
         arm.JointCtrl(0, 0, 0, 0, 0, 0)  # home to joint zero (this arm only)
         if open_gripper:
-            arm.GripperCtrl(HOME_GRIPPER_OPEN, 1000, 0x01, 0)
+            arm.GripperCtrl(int(open_units), effort, 0x01, 0)
         time.sleep(settle)
 
 
@@ -812,7 +899,11 @@ def home_robot(robot, cfg: RealEvalConfig):
     the follower → collision). record keeps the teleop home (zero.py)."""
     for side, arm in robot.arms.items():
         logger.info(f"Homing {side} in control mode (no teleop) ...")
-        home_follower(arm, cfg.eef_speed_rate)
+        home_follower(
+            arm, cfg.eef_speed_rate, effort=cfg.gripper_effort,
+            # full open per training data (~9.8)
+            open_units=int(cfg.gripper_reset_open * GRIPPER_SCALE),
+        )
 
 
 # CTRL_MODE codes from GetArmStatus().arm_status.ctrl_mode (CAN 0x2A1); mirrors

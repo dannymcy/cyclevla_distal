@@ -689,6 +689,11 @@ class RealEvalConfig:
 
     # ---- cyclevla-only (ignored by the transit script) ----
     progress_threshold: float = 0.90      # p_t level that triggers the VLM check
+    # Seconds to HOLD the idle arm after the 90% check fires, BEFORE capturing the
+    # image sent to the VLM. Lets the operator manually perturb the object to force
+    # a backtrack while debugging. 0 = immediate capture (no hold). The hold is
+    # recorded to the rollout video.
+    vlm_check_delay_sec: float = 2.0
     max_subtask_retries: int = 3          # backtrack/retry cap per subtask
     vlm_model: str = "gpt-5.5"            # VLM for the transit/backtrack decision
     vlm_temperature: float = 1.0

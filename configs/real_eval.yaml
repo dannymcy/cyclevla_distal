@@ -68,7 +68,8 @@ log_dir: data/rollouts/logs
 dry_run: false
 
 # ---- cyclevla-only (ignored by the transit script) ----
-progress_threshold: 0.95
+progress_threshold: 0.90
+vlm_check_delay_sec: 2.0    # HOLD (s) after the 90% check before grabbing the VLM image; lets you nudge the object to force a backtrack. 0 = immediate.
 max_subtask_retries: 3
 vlm_model: gpt-5.5
 vlm_temperature: 1.0

@@ -506,9 +506,46 @@ def run_episode_cyclevla(cfg, robot, arm, client, states, vlm, events, writer):
             if not vlm_check_needed:
                 continue
 
-            # Query the VLM on the 90% snapshot, but STREAM live frames of the idle
-            # robot to the video during the (multi-second) blocking call — otherwise
-            # the recording shows a freeze while the decision is being made.
+            # ===== 90% reached: VLM decision point =====
+            # Prominent banner so the operator knows a check was hit (and can nudge
+            # the object to inject an error during the hold below).
+            delay = cfg.vlm_check_delay_sec
+            logger.info("=" * 70)
+            logger.info(
+                f">>> VLM CHECK REACHED @ step {t} — subtask `{current_state}` (p_t>=0.90)"
+            )
+            if delay > 0:
+                logger.info(
+                    f">>> Holding {delay:.1f}s before capturing the VLM image — "
+                    f"ADJUST THE OBJECT NOW to inject an error."
+                )
+            logger.info("=" * 70)
+
+            # Hold the arm idle for `delay`s, streaming live frames (so the
+            # perturbation window is on the video) with a 1 Hz countdown log.
+            period = 1.0 / cfg.fps
+            n_frames = max(0, int(round(delay * cfg.fps)))
+            last_logged_sec = None
+            for i in range(n_frames):
+                loop_start = time.perf_counter()
+                remaining_sec = int(round((n_frames - i) * period))
+                if remaining_sec != last_logged_sec and remaining_sec > 0:
+                    logger.info(f">>> capturing VLM image in ~{remaining_sec}s ...")
+                    last_logged_sec = remaining_sec
+                try:
+                    o = read_observation(robot)
+                    writer.add(
+                        {"image": o[TOP_KEY], "wrist_image": o[wrist_key]},
+                        f"HUMAN MAY INJECT ERROR: {current_state}",
+                    )
+                except CameraReadError as e:  # a drop must not abort the hold
+                    logger.warning(f"Camera read failed during VLM-check delay: {e}")
+                precise_sleep(max(0.0, period - (time.perf_counter() - loop_start)))
+
+            # Capture the (possibly perturbed) image for the VLM, then STREAM live
+            # frames of the idle robot during the (multi-second) blocking call —
+            # otherwise the recording shows a freeze while the decision is made.
+            obs = read_observation(robot)
             top_img, wrist_img = obs[TOP_KEY], obs[wrist_key]
             try:
                 res = record_while_busy(

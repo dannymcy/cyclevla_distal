@@ -20,7 +20,7 @@ num_open_loop_steps: 5      # actions executed before requerying the server (<=1
 # ---- task / robot ----
 # MUST be one of the keys in distal/hardware/subtasks.py (drives the per-subtask
 # prompts the policy was trained on).
-single_task: place the grape on the red plate and the apple on the green plate
+single_task: place the can of corn on the pan and the milk carton in the pot
 sides: [left]               # active arm set; sides[0] is driven (left set is the default rig)
 fps: 20                     # control loop rate (matches the training/recording fps)
 max_steps: 5000              # hard per-episode step budget
@@ -34,7 +34,7 @@ eef_speed_rate: 30          # MotionCtrl_2 speed % (0-100)
 delta_base: chunk           # "chunk" = accumulate Δ from the EEF read at each requery; "live" = Δ on the live EEF
 max_pos_step: 0.50          # per-step ΔEEF position clamp (m); <=0 disables
 max_rot_step: 3.0          # per-step ΔEEF rotation clamp (rad); 1.0 verified — 0.3 over-clips the policy's rotation deltas; <=0 disables
-invert_gripper: false       # flip gripper polarity vs sim — VERIFY open/close on the first rollout
+# invert_gripper: false       # flip gripper polarity vs sim — VERIFY open/close on the first rollout
 # Measured training-data gripper obs range: bimodal — closed/grasp ≈ 4.3, full open ≈ 9.8
 # (valley ≈ 7.0). Policy outputs absolute stroke in this space; no ±1 command.
 gripper_open: 10.0          # obs-unit FULL OPEN (data ~9.8). Hysteresis open target (not used by binarize)
@@ -70,7 +70,8 @@ log_dir: data/rollouts/logs
 dry_run: false
 
 # ---- cyclevla-only (ignored by the transit script) ----
-progress_threshold: 0.90
+progress_threshold: 0.95
+# 0.95 for the task place the can of corn on the pan and the milk carton in the pot, others 0.90
 vlm_check_delay_sec: 2.0    # HOLD (s) after the 90% check before grabbing the VLM image; lets you nudge the object to force a backtrack. 0 = immediate.
 max_subtask_retries: 3
 vlm_model: gpt-5.5

@@ -464,9 +464,15 @@ def run_episode_cyclevla(cfg, robot, arm, client, states, vlm, events, writer):
 
         # ===== PHASE 1: 90% progress -> VLM decision =====
         if subtask_phase == "to_check":
-            # Gripper subtasks are trivial; skip the VLM (matches the sim script
-            # and the subtasks.py "gripper" convention).
-            if "gripper" in current_state.lower():
+            # Only actual gripper ACTUATION subtasks (open/close) are trivial and
+            # skip the VLM; reach/motion subtasks ("move the gripper above ...")
+            # must still go through the VLM transit/backtrack decision. Mirrors the
+            # sim (run_libero_eval_openpi_cyclevla.py), but keys off the leading
+            # verb so it also catches "open the gripper to hang ..." (teapot task).
+            # NOTE: distinct from the convert_to_cyclevla.py oversampling test,
+            # where a broad "gripper" substring is intentional (every subtask).
+            cs = current_state.lower()
+            if cs.startswith("close the gripper to") or cs.startswith("open the gripper to"):
                 logger.info(f"Gripper subtask `{current_state}` - skipping VLM check.")
                 subtask_phase = "to_complete"
                 reset_phase_counters()

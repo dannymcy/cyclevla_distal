@@ -39,7 +39,7 @@ invert_gripper: false       # flip gripper polarity vs sim — VERIFY open/close
 # (valley ≈ 7.0). Policy outputs absolute stroke in this space; no ±1 command.
 gripper_open: 10.0          # obs-unit FULL OPEN (data ~9.8). Hysteresis open target (not used by binarize)
 gripper_closed: 0.0         # CLOSE target (0 = firm full close onto object); ignored in continuous
-gripper_close_threshold: 8.2  # binarize FIRM-CLOSE trigger: g<=this -> full close, g>this -> pos-control; IGNORED in continuous & hysteresis
+gripper_close_threshold: 8.25  # binarize FIRM-CLOSE trigger: g<=this -> full close, g>this -> pos-control; IGNORED in continuous & hysteresis
 # --- gripper mode selection (precedence: hysteresis > binarize > raw) ---
 # gripper_binarize false = CONTINUOUS/pos-control: command the policy's raw stroke (exact
 # training state, close ~4.3→43mm / open ~9.8→98mm). true = FIRM-CLOSE-ONLY hybrid: below

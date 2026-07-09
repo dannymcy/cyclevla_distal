@@ -163,11 +163,8 @@ class VLMDetector:
         - WRIST: close-up gripper view (detailed contact, local geometry, physical affordances)
 
         Decision rule (forecasting at ~90%):
-        - Default to **transit** when success appears reasonably likely within the next few actions **without** corrective repositioning.
+        - **Transit** when success appears reasonably likely within the next few actions **without** corrective repositioning.
         - Choose **backtrack** if strong, unambiguous visual evidence indicates that the subtask will fail without repositioning.
-
-        Caveats:
-        - For the subtask "move the gripper toward the middle peg of the mug holder while holding the green teapot", the peg needs to be inside the handle of the teapot, so that when released, the teapot will hang on it.
 
         View-specific fusion instruction:
         - FRONT view provides **global context**: object identity, pose, global alignment, reachability, and path clearance.
@@ -177,11 +174,8 @@ class VLMDetector:
         - WRIST dominates for local contact accuracy and grasp quality.
 
         Affordance reasoning guidance:
-        - Evaluate whether the gripper's pose is **consistent with the object's intended use**:
-        - For a bowl: grasping the **edge or rim** is acceptable and often intended for lifting.
-        - For a drawer: alignment with the **handle** is the key indicator of readiness.
-        - For a push or pull action: confirm direction and surface contact match the required motion.
-        - Do not penalize partial or asymmetric contacts if they serve a valid affordance and appear stable.
+        - Aim for the center of the object.
+        - For the subtask "move the gripper toward the middle peg of the mug holder while holding the green teapot", the peg needs to be inside the handle of the teapot (CHECK CAREFULLY), so that when released, the teapot will hang on it.
 
         Wrong object or wrong subtask detection:
         In addition to misalignment, detect late-stage "silent failures" involving **wrong object engagement or wrong subtask execution**.
@@ -608,33 +602,55 @@ def run_episode_cyclevla(cfg, robot, arm, client, states, vlm, events, writer):
                 exe_type_hist.append(f"backtrack_retry{retry_num}")
                 action_queue.clear()
 
-                # Physically rewind by replaying recorded joints in reverse to the
-                # recorded start of the target subtask (skipped in --no_arm).
+                # Physically rewind to the recorded start of the target subtask
+                # (skipped in --no_arm). Backtracking to the FIRST subtask (idx 0)
+                # re-homes to the canonical zero start pose instead of replaying the
+                # whole trajectory in reverse.
                 target_idx = subtask_start_idx.get(current_state, 0)
                 if not cfg.no_arm:
-                    logger.info(f"Joint-replay backtrack to index {target_idx} ...")
 
-                    # Stream a frame per reverse step so the physical rewind motion
-                    # is captured in the video instead of appearing as a jump.
-                    def capture_backtrack_frame():
+                    # Stream a frame per motion step so the physical return is
+                    # captured in the video instead of appearing as a jump.
+                    def capture_frame(subtitle):
                         try:
                             o = read_observation(robot)
                             writer.add(
                                 {"image": o[TOP_KEY], "wrist_image": o[wrist_key]},
-                                f"backtracking: {current_state}",
+                                subtitle,
                             )
-                        except CameraReadError as e:  # a drop must not abort the rewind
+                        except CameraReadError as e:  # a drop must not abort the motion
                             logger.warning(f"Camera read failed during backtrack: {e}")
 
-                    backtrack_joints(
-                        arm,
-                        joint_hist,
-                        target_idx,
-                        cfg.fps,
-                        cfg.eef_speed_rate,
-                        grip_hist,
-                        on_step=capture_backtrack_frame,
-                    )
+                    if target_idx == 0:
+                        # First subtask == episode start: a clean re-home to joint
+                        # zero (same as the per-episode home) beats retracing every
+                        # recorded step in reverse.
+                        logger.info(
+                            "Backtrack target is subtask 0 — re-homing to zero start "
+                            "pose instead of joint replay."
+                        )
+                        home_robot(
+                            robot,
+                            cfg,
+                            on_step=lambda: capture_frame(
+                                f"re-homing to start: {current_state}"
+                            ),
+                        )
+                        # home leaves the arm in MOVE_J; restore EEF/MOVE_P for the retry.
+                        set_eef_mode(arm, cfg.eef_speed_rate)
+                    else:
+                        logger.info(f"Joint-replay backtrack to index {target_idx} ...")
+                        backtrack_joints(
+                            arm,
+                            joint_hist,
+                            target_idx,
+                            cfg.fps,
+                            cfg.eef_speed_rate,
+                            grip_hist,
+                            on_step=lambda: capture_frame(
+                                f"backtracking: {current_state}"
+                            ),
+                        )
                 # Truncate histories to where we physically returned.
                 joint_hist = joint_hist[:target_idx]
                 grip_hist = grip_hist[:target_idx]

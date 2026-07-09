@@ -175,6 +175,7 @@ class VLMDetector:
 
         Affordance reasoning guidance:
         - Aim for the center of the object.
+        - For the subtask "move the gripper above the xxx", the gripper needs to be in a ready-to-grasp pose, i.e., the object is positioned within the gripper's fingers, so that when the gripper closes, the object will be grasped.
         - For the subtask "move the gripper toward the middle peg of the mug holder while holding the green teapot", the peg needs to be inside the handle of the teapot (CHECK CAREFULLY), so that when released, the teapot will hang on it.
 
         Wrong object or wrong subtask detection:
@@ -474,7 +475,7 @@ def run_episode_cyclevla(cfg, robot, arm, client, states, vlm, events, writer):
             #     logger.info(f"Gripper subtask `{current_state}` - skipping VLM check.")
             #     subtask_phase = "to_complete"
             #     reset_phase_counters()
-                # continue
+            #     continue
             
             # Never skip
             if cs.startswith("Never skip"):

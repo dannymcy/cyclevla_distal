@@ -20,7 +20,7 @@ num_open_loop_steps: 5      # actions executed before requerying the server (<=1
 # ---- task / robot ----
 # MUST be one of the keys in distal/hardware/subtasks.py (drives the per-subtask
 # prompts the policy was trained on).
-single_task: hang the green teapot on the mug holder
+single_task: place the grape on the red plate and the apple on the green plate
 sides: [left]               # active arm set; sides[0] is driven (left set is the default rig)
 fps: 20                     # control loop rate (matches the training/recording fps)
 max_steps: 5000              # hard per-episode step budget
@@ -33,13 +33,14 @@ restore_teleop_on_exit: true
 eef_speed_rate: 30          # MotionCtrl_2 speed % (0-100)
 delta_base: chunk           # "chunk" = accumulate Δ from the EEF read at each requery; "live" = Δ on the live EEF
 max_pos_step: 0.50          # per-step ΔEEF position clamp (m); <=0 disables
-max_rot_step: 10.0          # per-step ΔEEF rotation clamp (rad); 1.0 verified — 0.3 over-clips the policy's rotation deltas; <=0 disables
+max_rot_step: 3.0          # per-step ΔEEF rotation clamp (rad); 1.0 verified — 0.3 over-clips the policy's rotation deltas; <=0 disables
 invert_gripper: false       # flip gripper polarity vs sim — VERIFY open/close on the first rollout
 # Measured training-data gripper obs range: bimodal — closed/grasp ≈ 4.3, full open ≈ 9.8
 # (valley ≈ 7.0). Policy outputs absolute stroke in this space; no ±1 command.
 gripper_open: 10.0          # obs-unit FULL OPEN (data ~9.8). Hysteresis open target (not used by binarize)
 gripper_closed: 0.0         # CLOSE target (0 = firm full close onto object); ignored in continuous
-gripper_close_threshold: 8.25  # binarize FIRM-CLOSE trigger: g<=this -> full close, g>this -> pos-control; IGNORED in continuous & hysteresis
+gripper_close_threshold: 6.0  # binarize FIRM-CLOSE trigger: g<=this -> full close, g>this -> pos-control; IGNORED in continuous & hysteresis
+# gripper_close_threshold: 8.25  # higher value for hang the pot
 # --- gripper mode selection (precedence: hysteresis > binarize > raw) ---
 # gripper_binarize false = CONTINUOUS/pos-control: command the policy's raw stroke (exact
 # training state, close ~4.3→43mm / open ~9.8→98mm). true = FIRM-CLOSE-ONLY hybrid: below
@@ -56,7 +57,7 @@ gripper_close_below: 8.25    # hysteresis: latch CLOSED at/below this (close clu
 # per-step open target tune separately. 10.0 = training full-open (~9.8) so the arm STARTS
 # in the open state the policy expects (policy immediately takes over during the episode).
 gripper_reset_open: 10.0
-gripper_effort: 3000        # GripperCtrl effort (0.001 N·m, 0-5000); firm grip
+gripper_effort: 500        # GripperCtrl effort (0.001 N·m, 0-5000); firm grip
 no_arm: false               # diagnostic: cameras + server only, never command the arm (USB-CAN isolation)
 camera_fps: null            # override RealSense fps (e.g. 15) to cut USB bandwidth; null keeps 30
 
@@ -75,5 +76,5 @@ vlm_model: gpt-5.5
 vlm_temperature: 1.0
 mbr_num_seeds: 8
 mbr_distance_metric: l2
-mbr_use_failed_repulsion: true
+mbr_use_failed_repulsion: false
 mbr_vanilla: false

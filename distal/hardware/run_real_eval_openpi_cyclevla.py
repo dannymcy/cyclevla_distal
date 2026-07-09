@@ -176,6 +176,7 @@ class VLMDetector:
         Affordance reasoning guidance:
         - Aim for the center of the object.
         - For the subtask "move the gripper toward the middle peg of the mug holder while holding the green teapot", the peg needs to be inside the handle of the teapot (CHECK CAREFULLY), so that when released, the teapot will hang on it.
+        - At subtask "move the gripper toward the middle peg of the mug holder while holding the green teapot", always backtrack and retry for one time.
 
         Wrong object or wrong subtask detection:
         In addition to misalignment, detect late-stage "silent failures" involving **wrong object engagement or wrong subtask execution**.

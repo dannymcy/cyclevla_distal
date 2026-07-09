@@ -75,5 +75,5 @@ vlm_model: gpt-5.5
 vlm_temperature: 1.0
 mbr_num_seeds: 8
 mbr_distance_metric: l2
-mbr_use_failed_repulsion: false
+mbr_use_failed_repulsion: true
 mbr_vanilla: false

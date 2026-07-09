@@ -379,7 +379,9 @@ def standby(arm):
         logger.warning(f"standby failed: {e}")
 
 
-def backtrack_joints(arm, joint_hist, target_idx, fps, speed_rate, grip_hist=None):
+def backtrack_joints(
+    arm, joint_hist, target_idx, fps, speed_rate, grip_hist=None, on_step=None
+):
     """Rewind the arm by replaying recorded joints in reverse to `target_idx`.
 
     `joint_hist[k]` is the joint vector (deg) measured just before executing step
@@ -388,6 +390,11 @@ def backtrack_joints(arm, joint_hist, target_idx, fps, speed_rate, grip_hist=Non
     we are backtracking to. Deterministic and safe: every pose was physically
     visited during this rollout. Leaves the arm in EEF (MOVE_P) mode for the
     retry.
+
+    `on_step`, if given, is called once per reverse step (after the move + pace
+    sleep) — the cyclevla eval uses it to stream a camera frame per step so the
+    physical rewind motion is captured in the rollout video instead of appearing
+    as a jump.
     """
     if target_idx < 0:
         target_idx = 0
@@ -397,6 +404,8 @@ def backtrack_joints(arm, joint_hist, target_idx, fps, speed_rate, grip_hist=Non
         g = grip_hist[k] if grip_hist is not None else None
         command_joints(arm, joint_hist[k], gripper=g)
         time.sleep(period)
+        if on_step is not None:
+            on_step()
     set_eef_mode(arm, speed_rate)
 
 
@@ -863,6 +872,45 @@ def read_observation(robot, retries=3, reconnect=True):
                 reconnect_cameras(robot)
             time.sleep(0.2)
     raise CameraReadError(f"Camera read failed after {retries} attempts: {last_err}")
+
+
+def record_while_busy(
+    robot, writer, top_key, wrist_key, subtitle, fps, fn, *args, **kwargs
+):
+    """Run a slow BLOCKING `fn(*args)` in a background thread while STREAMING live
+    camera frames to `writer`, so idle time (the VLM query, MBR sampling) is
+    captured in the rollout video instead of showing as a freeze. Returns fn's
+    result (re-raises its exception on the caller's thread).
+
+    The arm is NOT commanded here — it holds its last pose, which is exactly what
+    we want to record. Thread-safety: the caller is blocked inside this function,
+    so the main loop issues no camera/client calls meanwhile, and `fn` (VLM or
+    MBR) never touches the cameras or the arm — the worker and this frame-recording
+    loop share no mutable state.
+    """
+    result, error = {}, {}
+
+    def worker():
+        try:
+            result["value"] = fn(*args, **kwargs)
+        except BaseException as e:  # noqa: BLE001 — surfaced to the caller below
+            error["value"] = e
+
+    thread = threading.Thread(target=worker, daemon=True)
+    period = 1.0 / fps
+    thread.start()
+    while thread.is_alive():
+        loop_start = time.perf_counter()
+        try:
+            o = read_observation(robot)
+            writer.add({"image": o[top_key], "wrist_image": o[wrist_key]}, subtitle)
+        except CameraReadError as e:  # a transient drop must not abort the wait
+            logger.warning(f"Camera read failed during idle recording: {e}")
+        time.sleep(max(0.0, period - (time.perf_counter() - loop_start)))
+    thread.join()
+    if "value" in error:
+        raise error["value"]
+    return result.get("value")
 
 
 # Fallback gripper open on reset, in GripperCtrl units (0.001 mm). home_robot passes

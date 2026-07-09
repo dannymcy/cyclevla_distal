@@ -72,6 +72,7 @@ from distal.hardware.real_eval_common import (
     make_robot,
     read_observation,
     reconnect_cameras,
+    record_while_busy,
     report_ctrl_mode,
     run_dry_run,
     set_eef_mode,
@@ -164,6 +165,9 @@ class VLMDetector:
         Decision rule (forecasting at ~90%):
         - Default to **transit** when success appears reasonably likely within the next few actions **without** corrective repositioning.
         - Choose **backtrack** if strong, unambiguous visual evidence indicates that the subtask will fail without repositioning.
+
+        Caveats:
+        - For the subtask "move the gripper toward the middle peg of the mug holder while holding the green teapot", the peg needs to be inside the handle of the teapot, so that when released, the teapot will hang on it.
 
         View-specific fusion instruction:
         - FRONT view provides **global context**: object identity, pose, global alignment, reachability, and path clearance.
@@ -472,7 +476,14 @@ def run_episode_cyclevla(cfg, robot, arm, client, states, vlm, events, writer):
             # NOTE: distinct from the convert_to_cyclevla.py oversampling test,
             # where a broad "gripper" substring is intentional (every subtask).
             cs = current_state.lower()
-            if cs.startswith("close the gripper to") or cs.startswith("open the gripper to"):
+            # if cs.startswith("close the gripper to") or cs.startswith("open the gripper to"):
+            #     logger.info(f"Gripper subtask `{current_state}` - skipping VLM check.")
+            #     subtask_phase = "to_complete"
+            #     reset_phase_counters()
+                # continue
+            
+            # Never skip
+            if cs.startswith("Never skip"):
                 logger.info(f"Gripper subtask `{current_state}` - skipping VLM check.")
                 subtask_phase = "to_complete"
                 reset_phase_counters()
@@ -495,16 +506,19 @@ def run_episode_cyclevla(cfg, robot, arm, client, states, vlm, events, writer):
             if not vlm_check_needed:
                 continue
 
-            # Hold a few identical frames in the replay for VLM context.
+            # Query the VLM on the 90% snapshot, but STREAM live frames of the idle
+            # robot to the video during the (multi-second) blocking call — otherwise
+            # the recording shows a freeze while the decision is being made.
             top_img, wrist_img = obs[TOP_KEY], obs[wrist_key]
-            for _ in range(16):
-                writer.add(
-                    {"image": top_img, "wrist_image": wrist_img},
-                    f"VLM_90%_check: {current_state}",
-                )
-
             try:
-                res = vlm.detect_subtask(
+                res = record_while_busy(
+                    robot,
+                    writer,
+                    TOP_KEY,
+                    wrist_key,
+                    f"VLM_90%_check: {current_state}",
+                    cfg.fps,
+                    vlm.detect_subtask,
                     current_state,
                     states,
                     subtask_hist,
@@ -562,6 +576,19 @@ def run_episode_cyclevla(cfg, robot, arm, client, states, vlm, events, writer):
                 target_idx = subtask_start_idx.get(current_state, 0)
                 if not cfg.no_arm:
                     logger.info(f"Joint-replay backtrack to index {target_idx} ...")
+
+                    # Stream a frame per reverse step so the physical rewind motion
+                    # is captured in the video instead of appearing as a jump.
+                    def capture_backtrack_frame():
+                        try:
+                            o = read_observation(robot)
+                            writer.add(
+                                {"image": o[TOP_KEY], "wrist_image": o[wrist_key]},
+                                f"backtracking: {current_state}",
+                            )
+                        except CameraReadError as e:  # a drop must not abort the rewind
+                            logger.warning(f"Camera read failed during backtrack: {e}")
+
                     backtrack_joints(
                         arm,
                         joint_hist,
@@ -569,6 +596,7 @@ def run_episode_cyclevla(cfg, robot, arm, client, states, vlm, events, writer):
                         cfg.fps,
                         cfg.eef_speed_rate,
                         grip_hist,
+                        on_step=capture_backtrack_frame,
                     )
                 # Truncate histories to where we physically returned.
                 joint_hist = joint_hist[:target_idx]
@@ -590,7 +618,16 @@ def run_episode_cyclevla(cfg, robot, arm, client, states, vlm, events, writer):
                     logger.info(
                         f"Sampling {cfg.mbr_num_seeds} chunks for MBR of `{current_state}`..."
                     )
-                    subtask_chunk_rankings[current_state] = sample_and_rank_chunks_mbr(
+                    # STREAM live frames while the (multi-call, blocking) MBR
+                    # sampling runs — the arm sits idle at the rewound pose.
+                    subtask_chunk_rankings[current_state] = record_while_busy(
+                        robot,
+                        writer,
+                        TOP_KEY,
+                        wrist_key,
+                        f"MBR_sampling: {current_state}",
+                        cfg.fps,
+                        sample_and_rank_chunks_mbr,
                         cfg,
                         client,
                         obs_dict,

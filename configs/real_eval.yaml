@@ -57,7 +57,8 @@ gripper_close_below: 8.25    # hysteresis: latch CLOSED at/below this (close clu
 # per-step open target tune separately. 10.0 = training full-open (~9.8) so the arm STARTS
 # in the open state the policy expects (policy immediately takes over during the episode).
 gripper_reset_open: 10.0
-gripper_effort: 500        # GripperCtrl effort (0.001 N·m, 0-5000); firm grip
+gripper_effort: 500         # GripperCtrl effort (0.001 N·m, 0-5000); firm grip
+# gripper_effort: 3000      # Higher for hang the pot
 no_arm: false               # diagnostic: cameras + server only, never command the arm (USB-CAN isolation)
 camera_fps: null            # override RealSense fps (e.g. 15) to cut USB bandwidth; null keeps 30
 

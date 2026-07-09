@@ -471,18 +471,18 @@ def run_episode_cyclevla(cfg, robot, arm, client, states, vlm, events, writer):
             # NOTE: distinct from the convert_to_cyclevla.py oversampling test,
             # where a broad "gripper" substring is intentional (every subtask).
             cs = current_state.lower()
-            # if cs.startswith("close the gripper to") or cs.startswith("open the gripper to"):
-            #     logger.info(f"Gripper subtask `{current_state}` - skipping VLM check.")
-            #     subtask_phase = "to_complete"
-            #     reset_phase_counters()
-            #     continue
-            
-            # Never skip
-            if cs.startswith("Never skip"):
+            if cs.startswith("close the gripper to") or cs.startswith("open the gripper to"):
                 logger.info(f"Gripper subtask `{current_state}` - skipping VLM check.")
                 subtask_phase = "to_complete"
                 reset_phase_counters()
                 continue
+            
+            # Never skip
+            # if cs.startswith("Never skip"):
+            #     logger.info(f"Gripper subtask `{current_state}` - skipping VLM check.")
+            #     subtask_phase = "to_complete"
+            #     reset_phase_counters()
+            #     continue
 
             vlm_check_needed = False
             if robust_progress:

@@ -39,6 +39,7 @@ from distal.hardware.real_eval_common import (
     SignalConfirmer,
     active_side,
     apply_delta,
+    apply_task_overrides,
     build_observation,
     clip_delta,
     command_eef,
@@ -174,6 +175,7 @@ def run_episode_transit(cfg, robot, arm, client, states, events, writer):
 @draccus.wrap()
 def main(cfg: RealEvalConfig):
     setup_logging(cfg, "transit")
+    apply_task_overrides(cfg)  # per-task gripper/progress knobs from single_task
 
     # Subtask decomposition (same table the training convert used). The prompt
     # for each subtask is the bare lowercased subtask string.

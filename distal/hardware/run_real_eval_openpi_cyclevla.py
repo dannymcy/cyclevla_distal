@@ -60,6 +60,7 @@ from distal.hardware.real_eval_common import (
     SignalConfirmer,
     active_side,
     apply_delta,
+    apply_task_overrides,
     backtrack_joints,
     build_observation,
     clip_delta,
@@ -747,6 +748,7 @@ def main(cfg: RealEvalConfig):
 
     load_dotenv()
     setup_logging(cfg, "cyclevla")
+    apply_task_overrides(cfg)  # per-task gripper/progress knobs from single_task
     states = [s.lower() for s in subtasks.get_subtasks(cfg.single_task)]
     logger.info(f"Task: {cfg.single_task!r} -> {len(states)} subtasks: {states}")
 

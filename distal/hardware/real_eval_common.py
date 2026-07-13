@@ -51,6 +51,8 @@ from typing import Optional
 
 import numpy as np
 
+from distal.hardware import subtasks
+
 logger = logging.getLogger(__name__)
 
 
@@ -626,6 +628,10 @@ class RealEvalConfig:
     # ---- task / robot ----
     # single_task MUST be a key in distal/hardware/subtasks.py.
     single_task: str = "hang the green teapot on the mug holder"
+    # Per-task control overrides (task name -> {field: value}), defined in
+    # configs/real_eval.yaml and applied by apply_task_overrides() from single_task.
+    # The yaml is the single source of truth for per-task tuning.
+    task_overrides: dict[str, dict[str, float]] = field(default_factory=dict)
     sides: list[str] = field(default_factory=lambda: ["left"])  # sides[0] driven
     fps: int = 20                         # control loop rate (matches training fps)
     max_steps: int = 600                  # hard per-episode step budget
@@ -703,6 +709,35 @@ class RealEvalConfig:
     mbr_r_neighborhood: Optional[int] = None
     mbr_vanilla: bool = False
     # fmt: on
+
+
+def apply_task_overrides(cfg: RealEvalConfig) -> RealEvalConfig:
+    """Apply per-task control overrides from cfg.task_overrides (defined in
+    configs/real_eval.yaml) selected by cfg.single_task. Keeps the yaml the single
+    source of truth. Each value is coerced to the target field's existing type
+    (so e.g. gripper_effort stays int) and every change is logged. Call once in
+    main() after setup_logging."""
+    key = subtasks.normalize(cfg.single_task)
+    overrides = next(
+        (ov for task, ov in cfg.task_overrides.items()
+         if subtasks.normalize(task) == key),
+        {},
+    )
+    for name, value in overrides.items():
+        if not hasattr(cfg, name):
+            logger.warning(
+                f"[task-override] unknown field {name!r} in task_overrides; ignoring."
+            )
+            continue
+        old = getattr(cfg, name)
+        coerced = type(old)(value)  # yaml gives float; keep the field's own type
+        if old != coerced:
+            setattr(cfg, name, coerced)
+            logger.info(
+                f"[task-override] {name}: {old} -> {coerced} "
+                f"(from task_overrides for {cfg.single_task!r})"
+            )
+    return cfg
 
 
 def active_side(cfg: RealEvalConfig) -> str:

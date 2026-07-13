@@ -103,5 +103,5 @@ pixi run slurm run          # Submit SLURM job
 ## Hardware
 
 - **Piper robotic arm** — 6-DOF + gripper, controlled via CAN bus
-- **2x Intel RealSense D435** — wrist-mounted and scene cameras (640x480 @
-  30fps)
+- **2x Intel RealSense D405** — wrist-mounted and scene cameras (640x480 @
+  30fps). Short-range depth (~7–50 cm optimal), so mind object/scene distance

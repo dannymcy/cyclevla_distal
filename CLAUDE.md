@@ -287,8 +287,9 @@ auto-set to a per-task percentile during training), `advantage_dropout` (CFG).
 ### Hardware Plugins
 
 - `lerobot_robot_piper/` — Piper arm (6-DOF + gripper, CAN bus) + 2× Intel
-  RealSense D435 (wrist + scene, 640×480 @ 30fps). Platform-specific RealSense
-  variants for macOS vs Linux.
+  RealSense D405 (wrist + scene, 640×480 @ 30fps; short-range ~7–50 cm depth,
+  unlike the D435's ~0.3–3 m). Platform-specific RealSense variants for macOS vs
+  Linux.
 - `lerobot_teleoperator_piper/` — Piper teleop interface for `pixi run record`.
 
 Both packages are commented out from the `dev` group in `pyproject.toml`; sync

@@ -33,7 +33,7 @@ restore_teleop_on_exit: true
 eef_speed_rate: 30          # MotionCtrl_2 speed % (0-100)
 delta_base: chunk           # "chunk" = accumulate Δ from the EEF read at each requery; "live" = Δ on the live EEF
 max_pos_step: 0.50          # per-step ΔEEF position clamp (m); <=0 disables
-max_rot_step: 3.0          # per-step ΔEEF rotation clamp (rad); 1.0 verified — 0.3 over-clips the policy's rotation deltas; <=0 disables
+max_rot_step: 3.0           # per-step ΔEEF rotation clamp (rad); 1.0 verified — 0.3 over-clips the policy's rotation deltas; <=0 disables
 # invert_gripper: false       # flip gripper polarity vs sim — VERIFY open/close on the first rollout
 # Measured training-data gripper obs range: bimodal — closed/grasp ≈ 4.3, full open ≈ 9.8
 # (valley ≈ 7.0). Policy outputs absolute stroke in this space; no ±1 command.

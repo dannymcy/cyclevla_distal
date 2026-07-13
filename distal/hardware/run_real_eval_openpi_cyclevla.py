@@ -548,7 +548,7 @@ def run_episode_cyclevla(cfg, robot, arm, client, states, vlm, events, writer):
                     writer,
                     TOP_KEY,
                     wrist_key,
-                    f"VLM_90%_check: {current_state}",
+                    f"VLM thinking @90% progress: {current_state}",
                     cfg.fps,
                     vlm.detect_subtask,
                     current_state,
@@ -636,6 +636,9 @@ def run_episode_cyclevla(cfg, robot, arm, client, states, vlm, events, writer):
                             on_step=lambda: capture_frame(
                                 f"re-homing to start: {current_state}"
                             ),
+                            # Pace capture to the record fps so the re-home plays back
+                            # at real speed (not a ~10x-fast flash), like the other segments.
+                            step_period=1.0 / cfg.fps,
                         )
                         # home leaves the arm in MOVE_J; restore EEF/MOVE_P for the retry.
                         set_eef_mode(arm, cfg.eef_speed_rate)

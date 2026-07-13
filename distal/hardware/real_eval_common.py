@@ -926,7 +926,7 @@ HOME_GRIPPER_OPEN = 100_000
 
 def home_follower(
     arm, speed, repeats=5, settle=0.5, open_gripper=True, effort=GRIPPER_EFFORT,
-    open_units=HOME_GRIPPER_OPEN, on_step=None,
+    open_units=HOME_GRIPPER_OPEN, on_step=None, step_period=None,
 ):
     """Home ONE arm to joint-zero in CONTROL mode (NOT teleop / 0x191).
 
@@ -936,35 +936,46 @@ def home_follower(
     zero.py's `home_master_slave`, which keeps teleop for record. Note: control mode
     breaks the pairing until a power cycle, so power-cycle before `pixi run record`.
 
-    `on_step`, if given, is called once after each home iteration — the cyclevla eval
-    uses it to stream a camera frame per step so a re-home (e.g. backtracking to the
-    first subtask) is captured in the rollout video instead of appearing as a jump.
+    `on_step`, if given, streams a frame during the home — the cyclevla eval uses it
+    so a re-home (e.g. backtracking to the first subtask) is captured in the rollout
+    video. With `step_period` (seconds/frame, e.g. 1/fps) the settle window is spent
+    calling `on_step` at that cadence so playback is REAL-TIME instead of a ~10x-fast
+    flash; without it, `on_step` fires once per iteration (coarse).
     """
     arm.ModeCtrl(0x01, 0x01, int(speed), 0x00)  # CAN control + MOVE_J
     for _ in range(repeats):
         arm.JointCtrl(0, 0, 0, 0, 0, 0)  # home to joint zero (this arm only)
         if open_gripper:
             arm.GripperCtrl(int(open_units), effort, 0x01, 0)
-        time.sleep(settle)
-        if on_step is not None:
-            on_step()
+        # Spend the settle window. When recording, stream frames at ~1/step_period so
+        # a re-home plays back at real speed; otherwise one lump sleep (+ one on_step).
+        if on_step is not None and step_period and step_period > 0:
+            for _ in range(max(1, int(round(settle / step_period)))):
+                t0 = time.perf_counter()
+                on_step()
+                time.sleep(max(0.0, step_period - (time.perf_counter() - t0)))
+        else:
+            time.sleep(settle)
+            if on_step is not None:
+                on_step()
 
 
-def home_robot(robot, cfg: RealEvalConfig, on_step=None):
+def home_robot(robot, cfg: RealEvalConfig, on_step=None, step_period=None):
     """Home the active arm(s) to joint-zero in CONTROL mode (no teleop / 0x191).
 
     Eval runs entirely in control mode so ONLY the follower moves; the leader stays
     idle (the 0x191 master-slave home re-engages teleop and makes the leader drive
     the follower → collision). record keeps the teleop home (zero.py).
 
-    `on_step` is forwarded to `home_follower` (per-iteration frame capture)."""
+    `on_step` / `step_period` are forwarded to `home_follower` (paced frame capture
+    for real-time video of a re-home)."""
     for side, arm in robot.arms.items():
         logger.info(f"Homing {side} in control mode (no teleop) ...")
         home_follower(
             arm, cfg.eef_speed_rate, effort=cfg.gripper_effort,
             # full open per training data (~9.8)
             open_units=int(cfg.gripper_reset_open * GRIPPER_SCALE),
-            on_step=on_step,
+            on_step=on_step, step_period=step_period,
         )
 
 

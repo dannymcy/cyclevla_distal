@@ -132,6 +132,13 @@ class VLMDetector:
             raise ValueError("Failed to extract subtask or type from the response.")
         return subtask, type_str, reason
 
+
+        # - NOTICE: one human error will be manually injected into one of the subtasks. Be careful. The error will be one of the following types:
+        #     1) Distractor Introduction: The target object remains unchanged, but when the robot gripper approaches, grasps, or places it, a visually similar distractor object is added nearby to test whether the robot can distinguish the correct target.
+        #     2) Target Displacement: When the robot gripper approaches, grasps, or places an object, the object's location is perturbed by a certain distance to evaluate whether the robot can detect the mismatch and backtrack.
+        #     3) Target Substitution: When the robot gripper approaches, grasps, or places the target object, it is replaced with an unrelated object, and the original target object is perturbed to a slightly different location.
+
+
     def detect_subtask(
         self,
         current_subtask,
@@ -166,10 +173,6 @@ class VLMDetector:
         Decision rule (forecasting at ~90%):
         - **Transit** when success appears reasonably likely within the next few actions **without** corrective repositioning.
         - Choose **backtrack** if strong, unambiguous visual evidence indicates that the subtask will fail without repositioning.
-        - NOTICE: one human error will be manually injected into one of the subtasks. Be careful. The error will be one of the following types:
-            1) Distractor Introduction: The target object remains unchanged, but when the robot gripper approaches, grasps, or places it, a visually similar distractor object is added nearby to test whether the robot can distinguish the correct target.
-            2) Target Displacement: When the robot gripper approaches, grasps, or places an object, the object's location is perturbed by a certain distance to evaluate whether the robot can detect the mismatch and backtrack.
-            3) Target Substitution: When the robot gripper approaches, grasps, or places the target object, it is replaced with an unrelated object, and the original target object is perturbed to a slightly different location.
 
         View-specific fusion instruction:
         - FRONT view provides **global context**: object identity, pose, global alignment, reachability, and path clearance.
@@ -476,18 +479,18 @@ def run_episode_cyclevla(cfg, robot, arm, client, states, vlm, events, writer):
             # NOTE: distinct from the convert_to_cyclevla.py oversampling test,
             # where a broad "gripper" substring is intentional (every subtask).
             cs = current_state.lower()
-            # if cs.startswith("close the gripper to") or cs.startswith("open the gripper to"):
-            #     logger.info(f"Gripper subtask `{current_state}` - skipping VLM check.")
-            #     subtask_phase = "to_complete"
-            #     reset_phase_counters()
-            #     continue
-            
-            # Never skip
-            if cs.startswith("Never skip"):
+            if cs.startswith("close the gripper to") or cs.startswith("open the gripper to"):
                 logger.info(f"Gripper subtask `{current_state}` - skipping VLM check.")
                 subtask_phase = "to_complete"
                 reset_phase_counters()
                 continue
+            
+            # Never skip
+            # if cs.startswith("Never skip"):
+            #     logger.info(f"Gripper subtask `{current_state}` - skipping VLM check.")
+            #     subtask_phase = "to_complete"
+            #     reset_phase_counters()
+            #     continue
 
             vlm_check_needed = False
             if robust_progress:
